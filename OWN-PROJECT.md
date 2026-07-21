@@ -57,6 +57,22 @@ When a file changes after review:
 
 This means: **you don't have to re-review everything when code changes.**
 
+### Ignore Patterns
+
+Respects `.ownignore` or `.gitignore`:
+
+```bash
+# .ownignore
+/target
+Cargo.lock
+*.o
+node_modules/
+```
+
+- `.git` is always ignored
+- Patterns follow gitignore syntax
+- Use `.ownignore` for own-specific ignores
+
 ## Commands
 
 ```bash
@@ -65,6 +81,10 @@ own init
 
 # Review a file line by line
 own review src/main.rs
+
+# Scan directory for files needing review
+own scan           # scan current directory
+own scan src       # scan src/ only
 
 # Check ownership status
 own status
@@ -86,7 +106,7 @@ own status src/main.rs
 │   Q   6 │     age: u32,                                 │
 │       7 │ }                                             │
 └─────────────────────────────────────────────────────────┘
- j/k move  r reviewed  Q questioned  a approved  x rejected  n annotate  s save  q quit
+ j/k move  r reviewed  Q questioned  a approved  x rejected  s save  q quit
 ```
 
 ## Data Storage
@@ -129,7 +149,8 @@ This means:
 - **Storage:** Text-based `.own` files
 - **CLI:** clap
 - **TUI:** ratatui + crossterm
-- **Hashing:** SHA256 for content tracking
+- **Hashing:** DefaultHasher for content tracking
+- **Ignore:** glob patterns (gitignore-compatible)
 
 ## Why This Matters
 
@@ -146,3 +167,4 @@ The goal isn't 100% ownership. The goal is **knowing** what you own and what you
 - **Editor plugin** — VS Code extension for inline ownership
 - **CI integration** — Fail builds if ownership < threshold
 - **Blame integration** — Show ownership status in git blame
+- **Annotations UI** — Add/edit annotations in TUI

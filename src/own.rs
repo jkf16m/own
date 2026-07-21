@@ -77,6 +77,128 @@ pub struct Annotation {
     pub note: String,
 }
 
+// ─── Extract Command ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExtractState {
+    Rejected,
+    Approved,
+}
+
+pub fn extract(state: ExtractState, file: Option<&Path>) -> Result<()> {
+    let store = OwnershipStore::load()?;
+    let repo_root = std::env::current_dir()?;
+    
+    let target_state = match state {
+        ExtractState::Rejected => LineState::Rejected,
+        ExtractState::Approved => LineState::Approved,
+    };
+    
+    let label = match state {
+        ExtractState::Rejected => "Rejected",
+        ExtractState::Approved => "Approved",
+    };
+    
+    let mut found = false;
+    
+    // Collect files to process
+    let files: Vec<String> = if let Some(file_path) = file {
+        let file_str = file_path
+            .strip_prefix(&repo_root)
+            .unwrap_or(file_path)
+            .to_string_lossy()
+            .to_string();
+        vec![file_str]
+    } else {
+        store.files.keys().cloned().collect()
+    };
+    
+    for file_name in &files {
+        let ownership = store.get_file(file_name);
+        
+        // Collect ranges for this state
+        let mut ranges: Vec<(usize, usize, String)> = Vec::new();
+        
+        // Check annotations first
+        for ann in &ownership.annotations {
+            if ann.state == target_state && !ann.note.is_empty() {
+                ranges.push((ann.start_line, ann.end_line, ann.note.clone()));
+            }
+        }
+        
+        // Also check line states for ranges without annotations
+        let mut current_range: Option<(usize, usize)> = None;
+        for (&line_num, line_state) in &ownership.line_states {
+            if *line_state == target_state {
+                match &mut current_range {
+                    Some((_, end)) if *end + 1 == line_num => {
+                        *end = line_num;
+                    }
+                    _ => {
+                        if let Some(range) = current_range.take() {
+                            // Check if we already have this range from annotations
+                            if !ranges.iter().any(|(s, e, _)| *s == range.0 && *e == range.1) {
+                                ranges.push((range.0, range.1, String::new()));
+                            }
+                        }
+                        current_range = Some((line_num, line_num));
+                    }
+                }
+            }
+        }
+        if let Some(range) = current_range {
+            if !ranges.iter().any(|(s, e, _)| *s == range.0 && *e == range.1) {
+                ranges.push((range.0, range.1, String::new()));
+            }
+        }
+        
+        if ranges.is_empty() {
+            continue;
+        }
+        
+        found = true;
+        
+        // Read the source file
+        let source_path = repo_root.join(file_name);
+        let source_content = fs::read_to_string(&source_path)
+            .with_context(|| format!("Failed to read {}", source_path.display()))?;
+        let source_lines: Vec<&str> = source_content.lines().collect();
+        
+        // Print header
+        println!("## {}", file_name);
+        println!();
+        
+        // Print each range
+        for (start, end, note) in &ranges {
+            println!("### {} Lines {}-{}", label, start, end);
+            
+            // Print code block
+            println!("```rust");
+            for line_num in *start..=*end {
+                if let Some(line) = source_lines.get(line_num - 1) {
+                    println!("{}", line);
+                }
+            }
+            println!("```");
+            
+            // Print annotation if present
+            if !note.is_empty() {
+                println!("> **Annotation:** {}", note);
+            }
+            println!();
+        }
+    }
+    
+    if !found {
+        println!("No {} lines found.", label.to_lowercase());
+        if let Some(file_path) = file {
+            println!("File: {}", file_path.display());
+        }
+    }
+    
+    Ok(())
+}
+
 // ─── .own File Format ────────────────────────────────────────────────────────
 //
 // The .own file is a text format that stores:
@@ -255,28 +377,50 @@ impl OwnershipStore {
         let mut files = BTreeMap::new();
 
         if own_dir.exists() {
-            for entry in fs::read_dir(&own_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("own") {
-                    if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
-                        let content = fs::read_to_string(&path)?;
-                        files.insert(name.to_string(), FileOwnership::parse(&content));
-                    }
-                }
-            }
+            Self::load_recursive(&own_dir, &own_dir, &mut files)?;
         }
 
         Ok(Self { own_dir, files })
+    }
+
+    fn load_recursive(
+        base: &Path,
+        current: &Path,
+        files: &mut BTreeMap<String, FileOwnership>,
+    ) -> Result<()> {
+        if current.is_dir() {
+            for entry in fs::read_dir(current)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    Self::load_recursive(base, &path, files)?;
+                } else if path.extension().and_then(|e| e.to_str()) == Some("own") {
+                    // Get relative path from .own directory
+                    let rel_path = path.strip_prefix(base).unwrap_or(&path);
+                    // Convert: .own/src/main.rs.own -> src/main.rs
+                    // Just strip the .own extension
+                    let path_str = rel_path.to_string_lossy();
+                    let source_str = path_str.strip_suffix(".own").unwrap_or(&path_str).to_string();
+                    let content = fs::read_to_string(&path)?;
+                    files.insert(source_str, FileOwnership::parse(&content));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn save(&self) -> Result<()> {
         fs::create_dir_all(&self.own_dir)?;
 
         for (file_name, ownership) in &self.files {
-            let path = self.own_dir.join(format!("{}.own", file_name));
+            // Create mirrored directory structure
+            // file_name: src/main.rs -> .own/src/main.rs.own
+            let own_path = self.own_dir.join(format!("{}.own", file_name));
+            if let Some(parent) = own_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
             let content = ownership.serialize(file_name);
-            fs::write(&path, content)?;
+            fs::write(&own_path, content)?;
         }
 
         Ok(())
@@ -767,15 +911,16 @@ pub fn status(file: Option<&Path>) -> Result<()> {
     let store = OwnershipStore::load()?;
 
     if let Some(file_path) = file {
+        // Get full path without extension for lookup (e.g., src/main.rs -> src/main)
         let file_name = file_path
-            .file_stem()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown");
+            .with_extension("")
+            .to_string_lossy()
+            .to_string();
         let content = fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read {}", file_path.display()))?;
         let total_lines = content.lines().count();
 
-        let (reviewed, questioned, approved, rejected) = store.file_stats(file_name);
+        let (reviewed, questioned, approved, rejected) = store.file_stats(&file_name);
         let owned = reviewed + approved;
 
         println!("File: {}", file_name);
@@ -790,7 +935,7 @@ pub fn status(file: Option<&Path>) -> Result<()> {
         }
 
         // Show annotations
-        let ownership = store.get_file(file_name);
+        let ownership = store.get_file(&file_name);
         if !ownership.annotations.is_empty() {
             println!("\nAnnotations:");
             for ann in &ownership.annotations {
@@ -816,7 +961,15 @@ pub fn status(file: Option<&Path>) -> Result<()> {
         let mut total_lines = 0;
 
         for (file_name, _) in &store.files {
-            let path = PathBuf::from(file_name).with_extension("rs"); // Assume .rs for now
+            let path = PathBuf::from(file_name);
+            
+            // Skip ignored files
+            if let Ok(repo_root) = std::env::current_dir() {
+                if crate::ignore::should_ignore(&path, &repo_root) {
+                    continue;
+                }
+            }
+            
             let actual_lines = if let Ok(content) = fs::read_to_string(&path) {
                 content.lines().count()
             } else {
@@ -868,5 +1021,103 @@ pub fn init() -> Result<()> {
     }
 
     println!("\nYou can now run `own review <file>` to start tracking ownership.");
+    Ok(())
+}
+
+// ─── Scan Command ────────────────────────────────────────────────────────────
+
+pub fn scan(dir: &Path) -> Result<()> {
+    let store = OwnershipStore::load()?;
+    let repo_root = std::env::current_dir()?;
+    
+    println!("=== Scanning {} ===\n", dir.display());
+    
+    let files = crate::ignore::list_files(dir, &repo_root);
+    
+    // Build tree structure
+    let mut tree: BTreeMap<String, Vec<(PathBuf, usize, usize)>> = BTreeMap::new(); // dir -> (file, lines, owned)
+    let mut total_lines = 0;
+    let mut total_owned = 0;
+    
+    for file in &files {
+        // Get relative path for lookup
+        let file_str = file.strip_prefix(&repo_root).unwrap_or(file).to_string_lossy().to_string();
+        let ownership = store.get_file(&file_str);
+        
+        let total = fs::read_to_string(file)
+            .map(|c| c.lines().count())
+            .unwrap_or(0);
+        
+        let (reviewed, _questioned, approved, _rejected) = ownership.line_states.values().fold(
+            (0, 0, 0, 0),
+            |(r, q, a, x), state| match state {
+                LineState::Reviewed => (r + 1, q, a, x),
+                LineState::Questioned => (r, q + 1, a, x),
+                LineState::Approved => (r, q, a + 1, x),
+                LineState::Rejected => (r, q, a, x + 1),
+            },
+        );
+        let owned = reviewed + approved;
+        
+        total_lines += total;
+        total_owned += owned;
+        
+        // Get directory relative to scan dir
+        let rel_path = file.strip_prefix(&repo_root).unwrap_or(file);
+        let dir_name = rel_path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string());
+        
+        tree.entry(dir_name)
+            .or_default()
+            .push((rel_path.to_path_buf(), total, owned));
+    }
+    
+    // Print tree
+    for (dir, files) in &tree {
+        // Calculate directory ownership
+        let dir_lines: usize = files.iter().map(|(_, l, _)| l).sum();
+        let dir_owned: usize = files.iter().map(|(_, _, o)| o).sum();
+        let dir_pct = if dir_lines > 0 {
+            dir_owned as f64 / dir_lines as f64 * 100.0
+        } else {
+            0.0
+        };
+        
+        println!("{}/ ({:.0}%)", dir, dir_pct);
+        
+        for (file, lines, owned) in files {
+            let file_name = file.file_name().unwrap_or_default().to_string_lossy();
+            let pct = if *lines > 0 {
+                *owned as f64 / *lines as f64 * 100.0
+            } else {
+                0.0
+            };
+            
+            let indicator = if *owned == *lines && *lines > 0 {
+                "✓"
+            } else if *owned > 0 {
+                "~"
+            } else {
+                " "
+            };
+            
+            println!("  {} {:<40} {:>5} lines {:>5.0}%", indicator, file_name, lines, pct);
+        }
+        println!();
+    }
+    
+    // Summary
+    let total_pct = if total_lines > 0 {
+        total_owned as f64 / total_lines as f64 * 100.0
+    } else {
+        0.0
+    };
+    
+    println!("=== Summary ===");
+    println!("Files: {} total", tree.values().map(|v| v.len()).sum::<usize>());
+    println!("Lines: {} total", total_lines);
+    println!("Ownership: {:.1}%", total_pct);
+    
     Ok(())
 }

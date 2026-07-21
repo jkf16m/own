@@ -1,0 +1,10 @@
+# file: src/main.rs
+# snapshot: test123
+1:r
+2:r
+3-5:a:Clean CLI setup with clap
+8-10:x:This could be simpler
+12:r
+15-20:x:Too much boilerplate here
+> Annotation: Simplify this section
+25:r
