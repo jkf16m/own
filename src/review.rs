@@ -369,7 +369,7 @@ fn run_app(
                     let has_tags = entry.map(|e| !e.tags.is_empty()).unwrap_or(false);
                     let annotation = ownership.get_annotation(line_num);
 
-                    // Build marker - colored dots for tags, tree char for annotations
+                    // Build marker - colored dots for tags, tree chars for annotations
                     let marker_spans: Vec<Span> = if has_tags || annotation.is_some() {
                         let mut markers: Vec<Span> = Vec::new();
                         
@@ -383,9 +383,22 @@ fn run_app(
                             }
                         }
                         
-                        // Add annotation marker (tree char)
-                        if annotation.is_some() {
-                            markers.push(Span::styled("├", Style::default().fg(Color::Magenta)));
+                        // Add annotation marker (tree chars for ranges)
+                        if let Some(ann) = &annotation {
+                            let ann_char = if ann.start_line == ann.end_line {
+                                // Single line annotation
+                                "●"
+                            } else if line_num == ann.start_line {
+                                // Start of range
+                                "┌"
+                            } else if line_num == ann.end_line {
+                                // End of range
+                                "└"
+                            } else {
+                                // Middle of range
+                                "│"
+                            };
+                            markers.push(Span::styled(ann_char, Style::default().fg(Color::Magenta)));
                         }
                         
                         // Pad to 3 chars
@@ -394,7 +407,8 @@ fn run_app(
                         }
                         markers
                     } else {
-                        vec![Span::raw("   ")]
+                        // No markers - skip the column entirely
+                        vec![]
                     };
 
                     let in_selection = state.is_in_selection(line_num);
@@ -409,8 +423,10 @@ fn run_app(
                     let mut spans = vec![
                         Span::styled(format!("{:>4} ", line_num), line_style),
                     ];
-                    spans.extend(marker_spans);
-                    spans.push(Span::raw(" │ "));
+                    if !marker_spans.is_empty() {
+                        spans.extend(marker_spans);
+                        spans.push(Span::raw(" │ "));
+                    }
                     spans.push(Span::styled(line.clone(), line_style));
 
                     if is_current {
