@@ -58,12 +58,28 @@ enum TagCommands {
     },
 }
 
+fn validate_file(path: &PathBuf, command: &str) -> Result<()> {
+    if !path.exists() {
+        anyhow::bail!("{}: {} does not exist", command, path.display());
+    }
+    if path.is_dir() {
+        anyhow::bail!("{}: {} is a directory, not a file", command, path.display());
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Add { file } => store::add(&file),
-        Commands::Review { file } => review::run(&file),
+        Commands::Add { file } => {
+            validate_file(&file, "add")?;
+            store::add(&file)
+        }
+        Commands::Review { file } => {
+            validate_file(&file, "review")?;
+            review::run(&file)
+        }
         Commands::Status => store::status(),
         Commands::Extract { format } => store::extract(&format),
         Commands::Tags { command } => match command {
