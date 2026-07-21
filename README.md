@@ -2,7 +2,7 @@
 
 Track your code ownership — human review, line by line.
 
-![Human Code Ownership](https://img.shields.io/badge/human-0.0%25-blue)
+![Human Code Ownership](https://img.shields.io/badge/human-0.0%25-red)
 
 ## What is this?
 
