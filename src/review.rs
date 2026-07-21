@@ -370,7 +370,7 @@ fn run_app(
                     let annotation = ownership.get_annotation(line_num);
 
                     // Build marker - colored dots for tags, tree chars for annotations
-                    let marker_spans: Vec<Span> = if has_tags || annotation.is_some() {
+                    let marker_spans: Vec<Span> = {
                         let mut markers: Vec<Span> = Vec::new();
                         
                         // Add tag dots (max 2)
@@ -385,30 +385,27 @@ fn run_app(
                         
                         // Add annotation marker (tree chars for ranges)
                         if let Some(ann) = &annotation {
-                            let ann_char = if ann.start_line == ann.end_line {
+                            let (ann_char, style) = if ann.start_line == ann.end_line {
                                 // Single line annotation
-                                "●"
+                                ("●", Style::default().fg(Color::Magenta))
                             } else if line_num == ann.start_line {
                                 // Start of range
-                                "┌"
+                                ("┌", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
                             } else if line_num == ann.end_line {
                                 // End of range
-                                "└"
+                                ("└", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
                             } else {
                                 // Middle of range
-                                "│"
+                                ("│", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
                             };
-                            markers.push(Span::styled(ann_char, Style::default().fg(Color::Magenta)));
+                            markers.push(Span::styled(ann_char, style));
                         }
                         
-                        // Pad to 3 chars
+                        // Always pad to 3 chars for consistent alignment
                         while markers.len() < 3 {
                             markers.insert(0, Span::raw(" "));
                         }
                         markers
-                    } else {
-                        // No markers - skip the column entirely
-                        vec![]
                     };
 
                     let in_selection = state.is_in_selection(line_num);
