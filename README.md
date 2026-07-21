@@ -36,14 +36,61 @@ own extract --format json   # JSON for badges
 | Key | Action |
 |-----|--------|
 | `j/k` | Move up/down |
-| `t` | Toggle last tag |
-| `T` | Pick a tag |
-| `r` | Remove tag |
-| `v` | Select lines |
-| `n` | Add annotation |
+| `g/G` | Go to top/bottom |
+| `t` | Toggle last tag (first time: pick tag) |
+| `T` | Always open tag picker |
+| `r` | Remove last tag |
+| `v` | Start selection |
+| `j/k` (in selection) | Extend selection |
+| `n` | Add/edit annotation |
 | `a` | View annotation |
 | `s` | Save |
 | `:q` | Quit |
+| `:w` | Save and quit |
+| `:wq` | Save and quit |
+| `:d` | Quit without saving |
+
+## TUI Visualization
+
+```
+│   ▸  1 │ fn main() {
+│     2 ├ init();              ← has annotation
+│     3 │     run();
+│   ┌  4 │ process(data);      ← start of range annotation
+│   │  5 │     validate();     ← middle of range
+│   │  6 │     save();         ← middle of range
+│   └  7 │ }                    ← end of range
+│     8 │ 
+│     9 ● reviewed             ← has tag
+│    10 │ // done
+```
+
+| Marker | Meaning |
+|--------|---------|
+| `●` | Single line annotation OR tag |
+| `┌` | Start of range annotation |
+| `│` | Middle of range |
+| `└` | End of range |
+| `▸` | Current line |
+
+## Annotations
+
+Annotations are notes attached to lines or ranges:
+
+```bash
+# Add annotation
+own review src/main.rs
+# Press 'n', type note, Enter
+
+# View annotation
+# Press 'a' on annotated line
+
+# Edit annotation
+# Press 'n' on existing annotation
+
+# Delete annotation
+# Press 'n', clear text, Enter
+```
 
 ## Tags
 
@@ -51,6 +98,7 @@ own extract --format json   # JSON for badges
 own tags list                    # List tags
 own tags create reviewed         # Auto-generate color
 own tags create urgent "#ff0000" # Custom color
+own tags delete urgent           # Delete tag
 ```
 
 ## How it works
@@ -59,6 +107,7 @@ own tags create urgent "#ff0000" # Custom color
 2. `own review` — open TUI, tag lines as reviewed
 3. `own status` — see ownership percentage
 4. `own extract` — export for reports/badges
+5. `make badge` — update README badge
 
 ## .own Files
 
@@ -74,10 +123,19 @@ Ownership data stored in `.own/` directory:
 
 Format:
 ```
-1:reviewed
-5-10:approved
+snapshot: abc123
+1:reviewed:hash1:alice:2024-01-20T10:00:00Z
+2:approved:hash2:bob:2024-01-20T10:05:00Z
 @5-10:This code looks correct
+@3:Single line note
 ```
+
+## Merge Support
+
+- Each review includes author and timestamp
+- Annotations survive file edits (content-based re-anchoring)
+- Deleted lines: annotations are removed
+- Multiple reviewers: all reviews stored
 
 ## License
 
