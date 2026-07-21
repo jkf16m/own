@@ -13,6 +13,8 @@ pub struct LineEntry {
     pub line: usize,
     pub tags: Vec<String>,
     pub content_hash: Option<String>,  // Hash of line content for tracking
+    pub author: Option<String>,
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,10 +24,49 @@ pub struct Annotation {
     pub note: String,
 }
 
+/// A review entry from a specific author
+#[derive(Debug, Clone)]
+pub struct ReviewEntry {
+    pub author: String,
+    pub timestamp: String,
+    pub tags: Vec<String>,
+    pub note: Option<String>,
+}
+
+impl ReviewEntry {
+    pub fn parse(line: &str) -> Option<Self> {
+        // Format: @10:alice:2024-01-20T10:00:00Z:reviewed,approved:optional note
+        if !line.starts_with('@') {
+            return None;
+        }
+        let rest = &line[1..];
+        let parts: Vec<&str> = rest.splitn(5, ':').collect();
+        if parts.len() < 4 {
+            return None;
+        }
+        Some(ReviewEntry {
+            author: parts[1].to_string(),
+            timestamp: parts[2].to_string(),
+            tags: parts[3].split(',').map(|s| s.trim().to_string()).collect(),
+            note: if parts.len() > 4 && !parts[4].is_empty() {
+                Some(parts[4].to_string())
+            } else {
+                None
+            },
+        })
+    }
+
+    pub fn serialize(&self, line: usize) -> String {
+        let note = self.note.as_deref().unwrap_or("");
+        format!("@{}:{}:{}:{}:{}", line, self.author, self.timestamp, self.tags.join(","), note)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct FileOwnership {
     pub snapshot: Option<String>,  // Hash of source file when reviewed
     pub entries: BTreeMap<usize, LineEntry>,
+    pub reviews: BTreeMap<usize, Vec<ReviewEntry>>,  // Multiple reviews per line
     pub annotations: Vec<Annotation>,
 }
 
@@ -89,7 +130,7 @@ impl Store {
     }
 
     pub fn get_file(&self, path: &str) -> &FileOwnership {
-        static EMPTY: FileOwnership = FileOwnership { snapshot: None, entries: std::collections::BTreeMap::new(), annotations: Vec::new() };
+        static EMPTY: FileOwnership = FileOwnership { snapshot: None, entries: std::collections::BTreeMap::new(), reviews: std::collections::BTreeMap::new(), annotations: Vec::new() };
         self.files.get(path).unwrap_or(&EMPTY)
     }
 
@@ -113,6 +154,18 @@ impl FileOwnership {
             // Parse snapshot line
             if let Some(hash) = line.strip_prefix("snapshot: ") {
                 ownership.snapshot = Some(hash.to_string());
+                continue;
+            }
+
+            // Parse review entry (multi-author)
+            if let Some(review) = ReviewEntry::parse(line) {
+                // Extract line number from the review
+                let rest = &line[1..]; // remove '@'
+                if let Some(colon_pos) = rest.find(':') {
+                    if let Ok(line_num) = rest[..colon_pos].parse::<usize>() {
+                        ownership.reviews.entry(line_num).or_default().push(review);
+                    }
+                }
                 continue;
             }
 
@@ -188,9 +241,16 @@ impl FileOwnership {
             lines.push(format!("snapshot: {}", snapshot));
         }
 
-        // Write line entries
+        // Write line entries (legacy format)
         for (_, entry) in &self.entries {
             lines.push(entry.serialize());
+        }
+
+        // Write reviews (multi-author format)
+        for (line_num, reviews) in &self.reviews {
+            for review in reviews {
+                lines.push(review.serialize(*line_num));
+            }
         }
 
         // Write annotations
@@ -199,6 +259,76 @@ impl FileOwnership {
         }
 
         lines.join("\n")
+    }
+
+    /// Merge another FileOwnership into this one
+    pub fn merge(&mut self, other: &FileOwnership) {
+        // Merge reviews - other's reviews are added
+        for (line_num, reviews) in &other.reviews {
+            let entry = self.reviews.entry(*line_num).or_default();
+            for review in reviews {
+                // Check if same author already reviewed this line
+                if let Some(existing) = entry.iter_mut().find(|r| r.author == review.author) {
+                    // Update if newer
+                    if review.timestamp > existing.timestamp {
+                        *existing = review.clone();
+                    }
+                } else {
+                    entry.push(review.clone());
+                }
+            }
+        }
+
+        // Merge annotations
+        for ann in &other.annotations {
+            // Simple: add if not exists
+            if !self.annotations.iter().any(|a| a.start_line == ann.start_line && a.end_line == ann.end_line && a.note == ann.note) {
+                self.annotations.push(ann.clone());
+            }
+        }
+    }
+
+    /// Get combined tags for a line from all reviews
+    pub fn get_line_tags(&self, line: usize) -> Vec<String> {
+        let mut all_tags = std::collections::HashSet::new();
+        
+        // From legacy entries
+        if let Some(entry) = self.entries.get(&line) {
+            for tag in &entry.tags {
+                all_tags.insert(tag.clone());
+            }
+        }
+        
+        // From reviews
+        if let Some(reviews) = self.reviews.get(&line) {
+            for review in reviews {
+                for tag in &review.tags {
+                    all_tags.insert(tag.clone());
+                }
+            }
+        }
+        
+        let mut tags: Vec<String> = all_tags.into_iter().collect();
+        tags.sort();
+        tags
+    }
+
+    /// Get review count for a line
+    pub fn get_review_count(&self, line: usize) -> usize {
+        self.reviews.get(&line).map(|r| r.len()).unwrap_or(0)
+    }
+
+    /// Get all unique reviewers
+    pub fn get_reviewers(&self) -> Vec<String> {
+        let mut reviewers = std::collections::HashSet::new();
+        for reviews in self.reviews.values() {
+            for review in reviews {
+                reviewers.insert(review.author.clone());
+            }
+        }
+        let mut reviewers: Vec<String> = reviewers.into_iter().collect();
+        reviewers.sort();
+        reviewers
     }
 
     /// Compute hash of source file content
@@ -223,24 +353,35 @@ impl FileOwnership {
         self.snapshot = Self::compute_snapshot(file_path);
     }
 
-    pub fn set_line(&mut self, line: usize, tags: Vec<String>, content: Option<&str>) {
+    pub fn set_line(&mut self, line: usize, tags: Vec<String>, content: Option<&str>, author: &str) {
+        // Update legacy entry
         if tags.is_empty() {
             self.entries.remove(&line);
         } else {
             let entry = match content {
-                Some(c) => LineEntry::with_content(line, tags, c),
+                Some(c) => LineEntry::with_content(line, tags.clone(), c, author),
                 None => {
-                    // Try to preserve existing content hash
                     let existing = self.entries.get(&line).and_then(|e| e.content_hash.clone());
                     LineEntry {
                         line,
-                        tags,
+                        tags: tags.clone(),
                         content_hash: existing,
+                        author: Some(author.to_string()),
+                        timestamp: Some(chrono::Utc::now().to_rfc3339()),
                     }
                 }
             };
             self.entries.insert(line, entry);
         }
+
+        // Also add review entry
+        let review = ReviewEntry {
+            author: author.to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            tags,
+            note: None,
+        };
+        self.reviews.entry(line).or_default().push(review);
     }
 
     pub fn get_annotation(&self, line: usize) -> Option<&Annotation> {
@@ -261,9 +402,10 @@ impl FileOwnership {
 
 impl LineEntry {
     pub fn parse(line: &str) -> Option<Self> {
-        // Format: 5:r,approved:content_hash
+        // Format: 5:r,approved:content_hash:author:timestamp
+        // or: 5:r,approved:content_hash
         // or: 5:r,approved
-        let parts: Vec<&str> = line.splitn(3, ':').collect();
+        let parts: Vec<&str> = line.splitn(5, ':').collect();
         if parts.len() < 2 {
             return None;
         }
@@ -275,23 +417,35 @@ impl LineEntry {
         } else {
             None
         };
+        let author = if parts.len() > 3 && !parts[3].is_empty() {
+            Some(parts[3].to_string())
+        } else {
+            None
+        };
+        let timestamp = if parts.len() > 4 && !parts[4].is_empty() {
+            Some(parts[4].to_string())
+        } else {
+            None
+        };
 
         Some(LineEntry {
             line: line_num,
             tags,
             content_hash,
+            author,
+            timestamp,
         })
     }
 
     pub fn serialize(&self) -> String {
-        match &self.content_hash {
-            Some(hash) => format!("{}:{}:{}", self.line, self.tags.join(","), hash),
-            None => format!("{}:{}", self.line, self.tags.join(",")),
-        }
+        let hash = self.content_hash.as_deref().unwrap_or("");
+        let author = self.author.as_deref().unwrap_or("");
+        let ts = self.timestamp.as_deref().unwrap_or("");
+        format!("{}:{}:{}:{}:{}", self.line, self.tags.join(","), hash, author, ts)
     }
 
     /// Create entry with content hash from line content
-    pub fn with_content(line: usize, tags: Vec<String>, content: &str) -> Self {
+    pub fn with_content(line: usize, tags: Vec<String>, content: &str, author: &str) -> Self {
         let mut hasher = DefaultHasher::new();
         content.hash(&mut hasher);
         let content_hash = format!("{:x}", hasher.finish());
@@ -299,6 +453,8 @@ impl LineEntry {
             line,
             tags,
             content_hash: Some(content_hash),
+            author: Some(author.to_string()),
+            timestamp: Some(chrono::Utc::now().to_rfc3339()),
         }
     }
 }
@@ -520,8 +676,10 @@ mod tests {
             line: 5,
             tags: vec!["reviewed".to_string()],
             content_hash: None,
+            author: None,
+            timestamp: None,
         };
-        assert_eq!(entry.serialize(), "5:reviewed");
+        assert_eq!(entry.serialize(), "5:reviewed:::");
     }
 
     #[test]
@@ -530,13 +688,15 @@ mod tests {
             line: 10,
             tags: vec!["r".to_string(), "a".to_string()],
             content_hash: Some("abc123".to_string()),
+            author: Some("alice".to_string()),
+            timestamp: Some("2024-01-20T10:00:00Z".to_string()),
         };
-        assert_eq!(entry.serialize(), "10:r,a:abc123");
+        assert_eq!(entry.serialize(), "10:r,a:abc123:alice:2024-01-20T10:00:00Z");
     }
 
     #[test]
     fn test_line_entry_roundtrip() {
-        let original = "7:reviewed,approved:hash123";
+        let original = "7:reviewed,approved:hash123:alice:2024-01-20T10:00:00Z";
         let entry = LineEntry::parse(original).unwrap();
         let serialized = entry.serialize();
         assert_eq!(original, serialized);
@@ -544,12 +704,13 @@ mod tests {
 
     #[test]
     fn test_line_entry_with_content() {
-        let entry = LineEntry::with_content(1, vec!["test".to_string()], "hello world");
+        let entry = LineEntry::with_content(1, vec!["test".to_string()], "hello world", "alice");
         assert_eq!(entry.line, 1);
         assert_eq!(entry.tags, vec!["test"]);
         assert!(entry.content_hash.is_some());
+        assert_eq!(entry.author, Some("alice".to_string()));
         // Same content should produce same hash
-        let entry2 = LineEntry::with_content(2, vec!["test".to_string()], "hello world");
+        let entry2 = LineEntry::with_content(2, vec!["test".to_string()], "hello world", "bob");
         assert_eq!(entry.content_hash, entry2.content_hash);
     }
 
@@ -618,6 +779,8 @@ mod tests {
             line: 1,
             tags: vec!["reviewed".to_string()],
             content_hash: None,
+            author: None,
+            timestamp: None,
         });
         let serialized = ownership.serialize();
         assert!(serialized.contains("snapshot: test123"));
@@ -629,18 +792,19 @@ mod tests {
         let mut ownership = FileOwnership::default();
         
         // Add line with content
-        ownership.set_line(5, vec!["reviewed".to_string()], Some("hello"));
+        ownership.set_line(5, vec!["reviewed".to_string()], Some("hello"), "alice");
         assert!(ownership.entries.contains_key(&5));
         assert!(ownership.entries[&5].content_hash.is_some());
+        assert_eq!(ownership.entries[&5].author, Some("alice".to_string()));
         
         // Update line without content (should preserve hash)
         let old_hash = ownership.entries[&5].content_hash.clone();
-        ownership.set_line(5, vec!["approved".to_string()], None);
+        ownership.set_line(5, vec!["approved".to_string()], None, "bob");
         assert_eq!(ownership.entries[&5].tags, vec!["approved"]);
         assert_eq!(ownership.entries[&5].content_hash, old_hash);
         
         // Remove line
-        ownership.set_line(5, vec![], None);
+        ownership.set_line(5, vec![], None, "charlie");
         assert!(!ownership.entries.contains_key(&5));
     }
 
@@ -651,6 +815,8 @@ mod tests {
             line: 1,
             tags: vec!["test".to_string()],
             content_hash: Some("hash".to_string()),
+            author: None,
+            timestamp: None,
         });
         
         let lines = vec!["new content".to_string()];
@@ -666,7 +832,7 @@ mod tests {
         ownership.snapshot = Some("old_hash".to_string());
         
         // Add entry with content hash matching "line2"
-        let entry = LineEntry::with_content(2, vec!["reviewed".to_string()], "line2");
+        let entry = LineEntry::with_content(2, vec!["reviewed".to_string()], "line2", "alice");
         ownership.entries.insert(2, entry);
         
         // New file: line1, NEW_LINE, line2
@@ -690,7 +856,7 @@ mod tests {
         ownership.snapshot = Some("old_hash".to_string());
         
         // Add entry for "deleted_line"
-        let entry = LineEntry::with_content(2, vec!["test".to_string()], "deleted_line");
+        let entry = LineEntry::with_content(2, vec!["test".to_string()], "deleted_line", "alice");
         ownership.entries.insert(2, entry);
         
         // New file without that line
@@ -711,7 +877,7 @@ mod tests {
         ownership.snapshot = Some("old_hash".to_string());
         
         // Add entry for "same_line"
-        let entry = LineEntry::with_content(1, vec!["test".to_string()], "same_line");
+        let entry = LineEntry::with_content(1, vec!["test".to_string()], "same_line", "alice");
         ownership.entries.insert(1, entry);
         
         // New file with duplicate content
@@ -734,8 +900,8 @@ mod tests {
         ownership.snapshot = Some("old_hash".to_string());
         
         // Add multiple entries
-        ownership.entries.insert(1, LineEntry::with_content(1, vec!["a".to_string()], "line1"));
-        ownership.entries.insert(3, LineEntry::with_content(3, vec!["b".to_string()], "line3"));
+        ownership.entries.insert(1, LineEntry::with_content(1, vec!["a".to_string()], "line1", "alice"));
+        ownership.entries.insert(3, LineEntry::with_content(3, vec!["b".to_string()], "line3", "bob"));
         
         // New file: line0, line1, line2, line3
         let lines = vec![

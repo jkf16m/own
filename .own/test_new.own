@@ -1,0 +1,4 @@
+snapshot: abc123
+1:reviewed:def456:alice:2024-01-20T10:00:00Z
+2:approved:ghi789:bob:2024-01-20T10:05:00Z
+@1-2:Important code block

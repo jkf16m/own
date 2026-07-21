@@ -37,6 +37,7 @@ struct ReviewState {
     select_end: Option<usize>,
     is_stale: bool,
     file_path: std::path::PathBuf,
+    author: String,
 }
 
 #[derive(PartialEq)]
@@ -87,6 +88,7 @@ impl ReviewState {
             select_end: None,
             is_stale,
             file_path: file_path.clone(),
+            author: std::env::var("USER").unwrap_or_else(|_| "unknown".to_string()),
         })
     }
 
@@ -106,9 +108,10 @@ impl ReviewState {
     fn set_line_tags(&mut self, tags: Vec<String>) {
         let line_num = self.line_number();
         let content = self.lines.get(line_num - 1).map(|s| s.as_str());
+        let author = self.author.clone();
         self.store
             .get_file_mut(&self.file_name)
-            .set_line(line_num, tags, content);
+            .set_line(line_num, tags, content, &author);
     }
 
     fn toggle_tag(&mut self, tag: &str) {
@@ -144,6 +147,7 @@ impl ReviewState {
             let entry = self.store.get_file(&self.file_name).entries.get(&line_num);
             let mut tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
             let content = self.lines.get(line_num - 1).map(|s| s.as_str());
+            let author = self.author.clone();
             
             if all_have {
                 tags.retain(|t| t != tag);
@@ -151,7 +155,7 @@ impl ReviewState {
                 tags.push(tag.to_string());
             }
             
-            self.store.get_file_mut(&self.file_name).set_line(line_num, tags, content);
+            self.store.get_file_mut(&self.file_name).set_line(line_num, tags, content, &author);
         }
     }
 
@@ -685,8 +689,9 @@ fn run_app(
                                             let entry = state.store.get_file(&state.file_name).entries.get(&line_num);
                                             let mut tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
                                             let content = state.lines.get(line_num - 1).map(|s| s.as_str());
+                                            let author = state.author.clone();
                                             tags.retain(|t| t != &tag);
-                                            state.store.get_file_mut(&state.file_name).set_line(line_num, tags, content);
+                                            state.store.get_file_mut(&state.file_name).set_line(line_num, tags, content, &author);
                                         }
                                     } else {
                                         state.remove_tag(&tag);
