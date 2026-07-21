@@ -421,9 +421,9 @@ fn run_app(
                     };
 
                     let line_num_str = if is_current {
-                        format!("▸{:>3} ", line_num)
+                        format!("▸{:>4} ", line_num)
                     } else {
-                        format!("{:>5} ", line_num)
+                        format!(" {:>4} ", line_num)
                     };
                     
                     let mut spans = vec![
