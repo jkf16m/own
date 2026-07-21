@@ -128,6 +128,10 @@ impl ReviewState {
 // ─── TUI ─────────────────────────────────────────────────────────────────────
 
 pub fn run(file_path: &Path) -> Result<()> {
+    if !file_path.exists() {
+        anyhow::bail!("File not found: {}", file_path.display());
+    }
+
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
