@@ -8,7 +8,7 @@ Track your code ownership — human review, line by line.
 
 ## What is this?
 
-`own` is a tool for tracking **human understanding** of code. Not AI-generated slop reviews — real, line-by-line human ownership.
+`own` is a tool for tracking **human understanding** of code. It provides a simple way to mark which lines have been reviewed by a human, attach annotations, and track ownership across your codebase.
 
 **Status**: Experimental — actively being developed and tested.
 
