@@ -420,18 +420,20 @@ fn run_app(
                         Style::default()
                     };
 
+                    let line_num_str = if is_current {
+                        format!("▸{:>3} ", line_num)
+                    } else {
+                        format!("{:>5} ", line_num)
+                    };
+                    
                     let mut spans = vec![
-                        Span::styled(format!("{:>4} ", line_num), line_style),
+                        Span::styled(line_num_str, line_style),
                     ];
                     if !marker_spans.is_empty() {
                         spans.extend(marker_spans);
                         spans.push(Span::raw(" │ "));
                     }
                     spans.push(Span::styled(line.clone(), line_style));
-
-                    if is_current {
-                        spans.insert(0, Span::styled("▸ ", Style::default().fg(Color::Cyan)));
-                    }
 
                     Line::from(spans)
                 })
