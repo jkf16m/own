@@ -201,6 +201,8 @@ impl FileOwnership {
 
         // Try to re-anchor each entry
         let mut new_entries = BTreeMap::new();
+        let mut deleted_lines = Vec::new();
+        
         for (old_line, entry) in &self.entries {
             if let Some(ref content_hash) = entry.content_hash {
                 // Find where this content is now
@@ -212,13 +214,18 @@ impl FileOwnership {
                     // Remove from map to prevent double-matching
                     hash_to_line.remove(content_hash);
                 } else {
-                    // Content deleted - keep at original line (may be wrong)
-                    new_entries.insert(*old_line, entry.clone());
+                // Content was deleted - remove the annotation
+                    deleted_lines.push(*old_line);
                 }
             } else {
                 // No content hash - keep at original line
                 new_entries.insert(*old_line, entry.clone());
             }
+        }
+        
+        // Remove reviews for deleted lines
+        for line in &deleted_lines {
+            self.reviews.remove(line);
         }
 
         self.entries = new_entries;
@@ -867,8 +874,8 @@ mod tests {
         
         ownership.reanchor(&lines);
         
-        // Entry should stay at original line (content not found)
-        assert!(ownership.entries.contains_key(&2));
+        // Entry should be removed (content no longer exists)
+        assert!(!ownership.entries.contains_key(&2));
     }
 
     #[test]
