@@ -1,5 +1,7 @@
 # own
 
+> ⚠️ **DISCLAIMER**: This is an ongoing experiment. The code has NOT been reviewed by a human yet. Use at your own risk.
+
 Track your code ownership — human review, line by line.
 
 ![Human Code Ownership](https://img.shields.io/badge/human-0.0%25-red)
@@ -7,6 +9,8 @@ Track your code ownership — human review, line by line.
 ## What is this?
 
 `own` is a tool for tracking **human understanding** of code. Not AI-generated slop reviews — real, line-by-line human ownership.
+
+**Status**: Experimental — actively being developed and tested.
 
 ## Install
 
