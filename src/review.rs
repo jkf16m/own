@@ -269,7 +269,10 @@ fn run_app(
 
                     // Build marker
                     let marker = if has_tags {
-                        let tag_str = entry.unwrap().tags.join(",");
+                        let tag_str = entry.unwrap().tags.iter()
+                            .map(|t| &t[..t.len().min(3)])
+                            .collect::<Vec<_>>()
+                            .join(",");
                         Span::styled(
                             format!("{:>3}", tag_str),
                             Style::default().fg(Color::Cyan),
