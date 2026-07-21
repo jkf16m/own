@@ -7,18 +7,18 @@ PERCENTAGE := $(shell own extract --format json 2>/dev/null | python3 -c "import
 BADGE_COLOR := $(shell if [ $(shell echo "$(PERCENTAGE) >= 80" | bc -l 2>/dev/null || echo 0) -eq 1 ]; then echo "brightgreen"; elif [ $(shell echo "$(PERCENTAGE) >= 50" | bc -l 2>/dev/null || echo 0) -eq 1 ]; then echo "yellow"; else echo "red"; fi)
 
 # Shield.io badge URL
-BADGE_URL := https://img.shields.io/badge/human-$(PERCENTAGE)%25-$(BADGE_COLOR)
+BADGE_URL := https://img.shields.io/badge/human%20reviewed-$(PERCENTAGE)%25-$(BADGE_COLOR)
 
 ## Update badge in README.md
 badge:
 	@echo "Updating badge: $(PERCENTAGE)%"
-	@sed -i 's|https://img.shields.io/badge/human-[^)]*|$(BADGE_URL)|g' README.md
+	@sed -i 's|https://img.shields.io/badge/human%20reviewed-[^)]*|$(BADGE_URL)|g' README.md
 	@echo "Badge updated in README.md"
 
 ## Update badge and show result
 update: badge
 	@echo "README.md badge: $(BADGE_URL)"
-	@grep -o 'https://img.shields.io/badge/human-[^)]*' README.md
+	@grep -o 'https://img.shields.io/badge/human%20reviewed-[^)]*' README.md
 
 ## Run tests
 test:
