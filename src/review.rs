@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Terminal,
 };
 use std::fs;
@@ -28,18 +28,17 @@ struct ReviewState {
     viewport_height: usize,
     store: Store,
     tags: TagStore,
-    select_start: Option<usize>,
-    select_end: Option<usize>,
     mode: Mode,
     input_buffer: String,
+    tag_filter: String,
+    tag_cursor: usize,
 }
 
 #[derive(PartialEq)]
 enum Mode {
     Normal,
-    SelectStart,
-    SelectEnd,
     InputNote,
+    SelectTag,
 }
 
 impl ReviewState {
@@ -57,10 +56,10 @@ impl ReviewState {
             viewport_height: 20,
             store: Store::load()?,
             tags: TagStore::load(),
-            select_start: None,
-            select_end: None,
             mode: Mode::Normal,
             input_buffer: String::new(),
+            tag_filter: String::new(),
+            tag_cursor: 0,
         })
     }
 
@@ -70,14 +69,18 @@ impl ReviewState {
 
     fn get_line_tags(&self) -> Vec<String> {
         let ownership = self.store.get_file(&self.file_name);
-        ownership.entries.get(&(self.line_number()))
+        ownership
+            .entries
+            .get(&(self.line_number()))
             .map(|e| e.tags.clone())
             .unwrap_or_default()
     }
 
     fn set_line_tags(&mut self, tags: Vec<String>, note: Option<String>) {
         let line_num = self.line_number();
-        self.store.get_file_mut(&self.file_name).set_line(line_num, tags, note);
+        self.store
+            .get_file_mut(&self.file_name)
+            .set_line(line_num, tags, note);
     }
 
     fn toggle_tag(&mut self, tag: &str) {
@@ -90,23 +93,14 @@ impl ReviewState {
         self.set_line_tags(current, None);
     }
 
-    fn apply_to_range(&mut self, tags: Vec<String>, note: Option<String>) {
-        let start = self.select_start.unwrap_or(self.line_number());
-        let end = self.select_end.unwrap_or(self.line_number());
-        let min = start.min(end);
-        let max = start.max(end);
-
-        for line_num in min..=max {
-            self.store.get_file_mut(&self.file_name).set_line(line_num, tags.clone(), note.clone());
-        }
-
-        self.select_start = None;
-        self.select_end = None;
-    }
-
-    fn delete_line(&mut self) {
-        let line_num = self.line_number();
-        self.store.get_file_mut(&self.file_name).entries.remove(&line_num);
+    fn get_filtered_tags(&self) -> Vec<String> {
+        let filter = self.tag_filter.to_lowercase();
+        self.tags
+            .tags
+            .keys()
+            .filter(|name| name.to_lowercase().contains(&filter))
+            .cloned()
+            .collect()
     }
 
     fn move_cursor(&mut self, delta: i32) {
@@ -158,7 +152,10 @@ pub fn run(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: &mut ReviewState) -> Result<()> {
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    state: &mut ReviewState,
+) -> Result<()> {
     loop {
         let size = terminal.size()?;
         state.viewport_height = size.height.saturating_sub(4) as usize;
@@ -167,20 +164,13 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: &m
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),  // Header
-                    Constraint::Min(1),    // Content
+                    Constraint::Length(3), // Header
+                    Constraint::Min(1),   // Content
                     Constraint::Length(3), // Footer
                 ])
                 .split(f.area());
 
             // Header
-            let (mode_text, mode_color) = match state.mode {
-                Mode::Normal => ("NORMAL", Color::Green),
-                Mode::SelectStart => ("SELECT START", Color::Yellow),
-                Mode::SelectEnd => ("SELECT END", Color::Yellow),
-                Mode::InputNote => ("INPUT NOTE", Color::Cyan),
-            };
-
             let line_num = state.line_number();
             let tags = state.get_line_tags();
             let tags_str = if tags.is_empty() {
@@ -191,22 +181,22 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: &m
 
             let header = Paragraph::new(Line::from(vec![
                 Span::styled(
-                    format!(" {} ", mode_text),
-                    Style::default().fg(Color::White).bg(mode_color),
-                ),
-                Span::raw("  "),
-                Span::styled(
-                    format!("Line {}/{}{}", line_num, state.lines.len(), tags_str),
+                    format!(" Line {}/{}", line_num, state.lines.len()),
                     Style::default().fg(Color::White),
                 ),
+                Span::styled(tags_str, Style::default().fg(Color::Cyan)),
                 Span::raw("  "),
-                Span::styled(state.file_name.clone(), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    state.file_name.clone(),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]))
             .block(Block::default().borders(Borders::ALL));
             f.render_widget(header, chunks[0]);
 
             // Content
-            let visible: Vec<Line> = state.lines
+            let visible: Vec<Line> = state
+                .lines
                 .iter()
                 .enumerate()
                 .skip(state.scroll_offset)
@@ -214,14 +204,6 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: &m
                 .map(|(i, line)| {
                     let line_num = i + 1;
                     let is_current = line_num == state.line_number();
-                    let in_selection = match (state.select_start, state.select_end) {
-                        (Some(s), Some(e)) => {
-                            let min = s.min(e);
-                            let max = s.max(e);
-                            line_num >= min && line_num <= max
-                        }
-                        _ => false,
-                    };
 
                     // Get tags for this line
                     let ownership = state.store.get_file(&state.file_name);
@@ -240,9 +222,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: &m
                         Span::raw("   ")
                     };
 
-                    let line_style = if in_selection {
-                        Style::default().bg(Color::DarkGray)
-                    } else if is_current {
+                    let line_style = if is_current {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
@@ -278,24 +258,38 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: &m
             // Footer
             let footer = if state.mode == Mode::InputNote {
                 Paragraph::new(Line::from(vec![
-                    Span::styled("Type note, ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        "Type note, ",
+                        Style::default().fg(Color::DarkGray),
+                    ),
                     Span::styled("Enter", Style::default().fg(Color::Yellow)),
                     Span::raw(" to save, "),
                     Span::styled("Esc", Style::default().fg(Color::Yellow)),
                     Span::raw(" cancel"),
                 ]))
+            } else if state.mode == Mode::SelectTag {
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        "Type to filter, ",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+                    Span::raw(" select, "),
+                    Span::styled("Enter", Style::default().fg(Color::Yellow)),
+                    Span::raw(" toggle, "),
+                    Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                    Span::raw(" close"),
+                ]))
             } else {
                 Paragraph::new(Line::from(vec![
                     Span::styled("j/k", Style::default().fg(Color::Yellow)),
                     Span::raw(" move  "),
-                    Span::styled("1-9", Style::default().fg(Color::Green)),
+                    Span::styled("t", Style::default().fg(Color::Green)),
                     Span::raw(" tag  "),
-                    Span::styled("v", Style::default().fg(Color::Green)),
-                    Span::raw(" select  "),
-                    Span::styled("d", Style::default().fg(Color::Red)),
-                    Span::raw(" delete  "),
                     Span::styled("n", Style::default().fg(Color::Cyan)),
                     Span::raw(" note  "),
+                    Span::styled("d", Style::default().fg(Color::Red)),
+                    Span::raw(" delete  "),
                     Span::styled("s", Style::default().fg(Color::DarkGray)),
                     Span::raw(" save  "),
                     Span::styled("q", Style::default().fg(Color::DarkGray)),
@@ -305,120 +299,132 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: &m
 
             let footer = footer.block(Block::default().borders(Borders::ALL));
             f.render_widget(footer, chunks[2]);
+
+            // Tag selection popup
+            if state.mode == Mode::SelectTag {
+                let filtered = state.get_filtered_tags();
+                let popup_height = (filtered.len() as u16 + 2).min(15);
+                let popup_width = 40;
+
+                let area = f.area();
+                let popup_x = (area.width - popup_width) / 2;
+                let popup_y = (area.height - popup_height) / 2;
+                let popup_area = ratatui::layout::Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+                f.render_widget(Clear, popup_area);
+
+                let tag_lines: Vec<Line> = filtered
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| {
+                        let style = if i == state.tag_cursor {
+                            Style::default()
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default()
+                        };
+
+                        // Check if tag is on current line
+                        let current_tags = state.get_line_tags();
+                        let marker = if current_tags.contains(name) {
+                            "✓ "
+                        } else {
+                            "  "
+                        };
+
+                        Line::from(vec![
+                            Span::styled(marker, Style::default().fg(Color::Green)),
+                            Span::styled(name.clone(), style),
+                        ])
+                    })
+                    .collect();
+
+                let tag_list = Paragraph::new(tag_lines)
+                    .block(Block::default().title("Tags").borders(Borders::ALL));
+                f.render_widget(tag_list, popup_area);
+            }
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match state.mode {
-                        Mode::Normal => {
-                            match key.code {
-                                KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                                KeyCode::Char('j') | KeyCode::Down => state.move_cursor(1),
-                                KeyCode::Char('k') | KeyCode::Up => state.move_cursor(-1),
-                                KeyCode::Char('g') => {
-                                    state.cursor = 0;
-                                    state.scroll_offset = 0;
-                                }
-                                KeyCode::Char('G') => {
-                                    state.cursor = state.lines.len().saturating_sub(1);
-                                    state.update_scroll();
-                                }
-                                KeyCode::Char('s') => state.store.save()?,
-                                KeyCode::Char('d') => state.delete_line(),
-
-                                // Tags 1-9
-                                KeyCode::Char('1') => state.toggle_tag("1"),
-                                KeyCode::Char('2') => state.toggle_tag("2"),
-                                KeyCode::Char('3') => state.toggle_tag("3"),
-                                KeyCode::Char('4') => state.toggle_tag("4"),
-                                KeyCode::Char('5') => state.toggle_tag("5"),
-                                KeyCode::Char('6') => state.toggle_tag("6"),
-                                KeyCode::Char('7') => state.toggle_tag("7"),
-                                KeyCode::Char('8') => state.toggle_tag("8"),
-                                KeyCode::Char('9') => state.toggle_tag("9"),
-
-                                // Selection
-                                KeyCode::Char('v') => {
-                                    state.select_start = Some(state.line_number());
-                                    state.mode = Mode::SelectEnd;
-                                }
-
-                                // Note
-                                KeyCode::Char('n') => {
-                                    state.mode = Mode::InputNote;
-                                    state.input_buffer.clear();
-                                }
-
-                                _ => {}
+                        Mode::Normal => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            KeyCode::Char('j') | KeyCode::Down => state.move_cursor(1),
+                            KeyCode::Char('k') | KeyCode::Up => state.move_cursor(-1),
+                            KeyCode::Char('g') => {
+                                state.cursor = 0;
+                                state.scroll_offset = 0;
                             }
-                        }
-                        Mode::SelectStart => {
-                            match key.code {
-                                KeyCode::Char('j') | KeyCode::Down => {
-                                    state.move_cursor(1);
-                                    state.select_start = Some(state.line_number());
-                                }
-                                KeyCode::Char('k') | KeyCode::Up => {
-                                    state.move_cursor(-1);
-                                    state.select_start = Some(state.line_number());
-                                }
-                                KeyCode::Esc => {
-                                    state.select_start = None;
-                                    state.mode = Mode::Normal;
-                                }
-                                KeyCode::Enter => {
-                                    state.mode = Mode::SelectEnd;
-                                }
-                                _ => {}
+                            KeyCode::Char('G') => {
+                                state.cursor = state.lines.len().saturating_sub(1);
+                                state.update_scroll();
                             }
-                        }
-                        Mode::SelectEnd => {
-                            match key.code {
-                                KeyCode::Char('j') | KeyCode::Down => {
-                                    state.move_cursor(1);
-                                    state.select_end = Some(state.line_number());
-                                }
-                                KeyCode::Char('k') | KeyCode::Up => {
-                                    state.move_cursor(-1);
-                                    state.select_end = Some(state.line_number());
-                                }
-                                KeyCode::Esc => {
-                                    state.select_start = None;
-                                    state.select_end = None;
-                                    state.mode = Mode::Normal;
-                                }
-                                KeyCode::Enter => {
-                                    // Apply to selection
-                                    let tags = state.get_line_tags();
-                                    state.apply_to_range(tags, None);
-                                    state.mode = Mode::Normal;
-                                }
-                                _ => {}
+                            KeyCode::Char('s') => state.store.save()?,
+                            KeyCode::Char('d') => {
+                                let line_num = state.line_number();
+                                state.store.get_file_mut(&state.file_name).entries.remove(&line_num);
                             }
-                        }
-                        Mode::InputNote => {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    state.mode = Mode::Normal;
-                                    state.input_buffer.clear();
-                                }
-                                KeyCode::Enter => {
-                                    let note = state.input_buffer.clone();
-                                    let tags = state.get_line_tags();
-                                    state.set_line_tags(tags, Some(note));
-                                    state.mode = Mode::Normal;
-                                    state.input_buffer.clear();
-                                }
-                                KeyCode::Char(c) => {
-                                    state.input_buffer.push(c);
-                                }
-                                KeyCode::Backspace => {
-                                    state.input_buffer.pop();
-                                }
-                                _ => {}
+                            KeyCode::Char('t') => {
+                                state.mode = Mode::SelectTag;
+                                state.tag_filter.clear();
+                                state.tag_cursor = 0;
                             }
-                        }
+                            KeyCode::Char('n') => {
+                                state.mode = Mode::InputNote;
+                                state.input_buffer.clear();
+                            }
+                            _ => {}
+                        },
+                        Mode::SelectTag => match key.code {
+                            KeyCode::Esc => {
+                                state.mode = Mode::Normal;
+                            }
+                            KeyCode::Enter => {
+                                let filtered = state.get_filtered_tags();
+                                if let Some(tag) = filtered.get(state.tag_cursor) {
+                                    state.toggle_tag(tag);
+                                }
+                            }
+                            KeyCode::Up => {
+                                state.tag_cursor = state.tag_cursor.saturating_sub(1);
+                            }
+                            KeyCode::Down => {
+                                let max = state.get_filtered_tags().len().saturating_sub(1);
+                                state.tag_cursor = (state.tag_cursor + 1).min(max);
+                            }
+                            KeyCode::Char(c) => {
+                                state.tag_filter.push(c);
+                                state.tag_cursor = 0;
+                            }
+                            KeyCode::Backspace => {
+                                state.tag_filter.pop();
+                                state.tag_cursor = 0;
+                            }
+                            _ => {}
+                        },
+                        Mode::InputNote => match key.code {
+                            KeyCode::Esc => {
+                                state.mode = Mode::Normal;
+                                state.input_buffer.clear();
+                            }
+                            KeyCode::Enter => {
+                                let note = state.input_buffer.clone();
+                                let tags = state.get_line_tags();
+                                state.set_line_tags(tags, Some(note));
+                                state.mode = Mode::Normal;
+                                state.input_buffer.clear();
+                            }
+                            KeyCode::Char(c) => {
+                                state.input_buffer.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                state.input_buffer.pop();
+                            }
+                            _ => {}
+                        },
                     }
                 }
             }
