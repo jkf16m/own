@@ -426,13 +426,14 @@ fn run_app(
                         format!(" {:>4} ", line_num)
                     };
                     
+                    // Always show: | markers │ line
                     let mut spans = vec![
+                        Span::styled("│", Style::default().fg(Color::DarkGray)),
+                        Span::raw(" "),
                         Span::styled(line_num_str, line_style),
                     ];
-                    if !marker_spans.is_empty() {
-                        spans.extend(marker_spans);
-                        spans.push(Span::raw(" │ "));
-                    }
+                    spans.extend(marker_spans);
+                    spans.push(Span::raw(" │ "));
                     spans.push(Span::styled(line.clone(), line_style));
 
                     Line::from(spans)
