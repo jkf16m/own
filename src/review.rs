@@ -33,6 +33,8 @@ struct ReviewState {
     tag_filter: String,
     tag_cursor: usize,
     last_tag: Option<String>,
+    select_start: Option<usize>,
+    select_end: Option<usize>,
 }
 
 #[derive(PartialEq)]
@@ -40,6 +42,7 @@ enum Mode {
     Normal,
     InputNote,
     SelectTag,
+    Selecting,
 }
 
 impl ReviewState {
@@ -62,6 +65,8 @@ impl ReviewState {
             tag_filter: String::new(),
             tag_cursor: 0,
             last_tag: None,
+            select_start: None,
+            select_end: None,
         })
     }
 
@@ -93,6 +98,37 @@ impl ReviewState {
             current.push(tag.to_string());
         }
         self.set_line_tags(current, None);
+    }
+
+    fn toggle_tag_on_selection(&mut self, tag: &str) {
+        let start = self.select_start.unwrap_or(self.line_number());
+        let end = self.select_end.unwrap_or(self.line_number());
+        let min = start.min(end);
+        let max = start.max(end);
+
+        for line_num in min..=max {
+            let entry = self.store.get_file(&self.file_name).entries.get(&line_num);
+            let mut tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
+            
+            if tags.contains(&tag.to_string()) {
+                tags.retain(|t| t != tag);
+            } else {
+                tags.push(tag.to_string());
+            }
+            
+            self.store.get_file_mut(&self.file_name).set_line(line_num, tags, None);
+        }
+    }
+
+    fn is_in_selection(&self, line_num: usize) -> bool {
+        match (self.select_start, self.select_end) {
+            (Some(s), Some(e)) => {
+                let min = s.min(e);
+                let max = s.max(e);
+                line_num >= min && line_num <= max
+            }
+            _ => false,
+        }
     }
 
     fn get_filtered_tags(&self) -> Vec<String> {
@@ -181,19 +217,37 @@ fn run_app(
                 format!(" [{}]", tags.join(","))
             };
 
-            let header = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!(" Line {}/{}", line_num, state.lines.len()),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(tags_str, Style::default().fg(Color::Cyan)),
-                Span::raw("  "),
-                Span::styled(
-                    state.file_name.clone(),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]))
-            .block(Block::default().borders(Borders::ALL));
+            let mode_str = match state.mode {
+                Mode::Selecting => {
+                    match (state.select_start, state.select_end) {
+                        (Some(s), Some(e)) => format!(" SELECT {}-{} ", s.min(e), s.max(e)),
+                        (Some(s), None) => format!(" SELECT {}-... ", s),
+                        _ => String::new(),
+                    }
+                }
+                _ => String::new(),
+            };
+
+            let mut header_spans = vec![];
+            if !mode_str.is_empty() {
+                header_spans.push(Span::styled(
+                    mode_str,
+                    Style::default().fg(Color::White).bg(Color::Yellow),
+                ));
+            }
+            header_spans.push(Span::styled(
+                format!(" Line {}/{}", line_num, state.lines.len()),
+                Style::default().fg(Color::White),
+            ));
+            header_spans.push(Span::styled(tags_str, Style::default().fg(Color::Cyan)));
+            header_spans.push(Span::raw("  "));
+            header_spans.push(Span::styled(
+                state.file_name.clone(),
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            let header = Paragraph::new(Line::from(header_spans))
+                .block(Block::default().borders(Borders::ALL));
             f.render_widget(header, chunks[0]);
 
             // Content
@@ -224,8 +278,11 @@ fn run_app(
                         Span::raw("   ")
                     };
 
+                    let in_selection = state.is_in_selection(line_num);
                     let line_style = if is_current {
                         Style::default().add_modifier(Modifier::BOLD)
+                    } else if in_selection {
+                        Style::default().bg(Color::DarkGray)
                     } else {
                         Style::default()
                     };
@@ -291,12 +348,14 @@ fn run_app(
                 Paragraph::new(Line::from(vec![
                     Span::styled("j/k", Style::default().fg(Color::Yellow)),
                     Span::raw(" move  "),
+                    Span::styled("v", Style::default().fg(Color::Green)),
+                    Span::raw(" select  "),
                     Span::styled("t", Style::default().fg(Color::Green)),
                     Span::raw(" toggle"),
                     Span::styled(last_tag_str, Style::default().fg(Color::Cyan)),
                     Span::raw("  "),
                     Span::styled("T", Style::default().fg(Color::Green)),
-                    Span::raw(" select tag  "),
+                    Span::raw(" pick tag  "),
                     Span::styled("n", Style::default().fg(Color::Cyan)),
                     Span::raw(" note  "),
                     Span::styled("d", Style::default().fg(Color::Red)),
@@ -384,9 +443,19 @@ fn run_app(
                                 state.tag_cursor = 0;
                             }
                             KeyCode::Char('t') => {
-                                if let Some(tag) = state.last_tag.clone() {
+                                if state.select_start.is_some() {
+                                    // Apply to selection
+                                    if let Some(tag) = state.last_tag.clone() {
+                                        state.toggle_tag_on_selection(&tag);
+                                    }
+                                } else if let Some(tag) = state.last_tag.clone() {
                                     state.toggle_tag(&tag);
                                 }
+                            }
+                            KeyCode::Char('v') => {
+                                state.select_start = Some(state.line_number());
+                                state.select_end = None;
+                                state.mode = Mode::Selecting;
                             }
                             KeyCode::Char('n') => {
                                 state.mode = Mode::InputNote;
@@ -419,6 +488,25 @@ fn run_app(
                             KeyCode::Backspace => {
                                 state.tag_filter.pop();
                                 state.tag_cursor = 0;
+                            }
+                            _ => {}
+                        },
+                        Mode::Selecting => match key.code {
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                state.move_cursor(1);
+                                state.select_end = Some(state.line_number());
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                state.move_cursor(-1);
+                                state.select_end = Some(state.line_number());
+                            }
+                            KeyCode::Esc => {
+                                state.select_start = None;
+                                state.select_end = None;
+                                state.mode = Mode::Normal;
+                            }
+                            KeyCode::Enter | KeyCode::Char('v') => {
+                                state.mode = Mode::Normal;
                             }
                             _ => {}
                         },
