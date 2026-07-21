@@ -369,19 +369,30 @@ fn run_app(
                     let has_tags = entry.map(|e| !e.tags.is_empty()).unwrap_or(false);
                     let annotation = ownership.get_annotation(line_num);
 
-                    // Build marker - colored dots for tags
-                    let marker_spans: Vec<Span> = if has_tags {
-                        let mut dots: Vec<Span> = entry.unwrap().tags.iter().take(3).map(|t| {
-                            let color = state.tags.tags.get(t)
-                                .map(|tag| parse_color(&tag.color))
-                                .unwrap_or(Color::White);
-                            Span::styled("●", Style::default().fg(color))
-                        }).collect();
-                        // Pad to 3 chars
-                        while dots.len() < 3 {
-                            dots.insert(0, Span::raw(" "));
+                    // Build marker - colored dots for tags, tree char for annotations
+                    let marker_spans: Vec<Span> = if has_tags || annotation.is_some() {
+                        let mut markers: Vec<Span> = Vec::new();
+                        
+                        // Add tag dots (max 2)
+                        if has_tags {
+                            for t in entry.unwrap().tags.iter().take(2) {
+                                let color = state.tags.tags.get(t)
+                                    .map(|tag| parse_color(&tag.color))
+                                    .unwrap_or(Color::White);
+                                markers.push(Span::styled("●", Style::default().fg(color)));
+                            }
                         }
-                        dots
+                        
+                        // Add annotation marker (tree char)
+                        if annotation.is_some() {
+                            markers.push(Span::styled("├", Style::default().fg(Color::Magenta)));
+                        }
+                        
+                        // Pad to 3 chars
+                        while markers.len() < 3 {
+                            markers.insert(0, Span::raw(" "));
+                        }
+                        markers
                     } else {
                         vec![Span::raw("   ")]
                     };
@@ -401,13 +412,6 @@ fn run_app(
                     spans.extend(marker_spans);
                     spans.push(Span::raw(" │ "));
                     spans.push(Span::styled(line.clone(), line_style));
-
-                    if let Some(ann) = annotation {
-                        spans.push(Span::styled(
-                            format!(" ← {}", ann.note),
-                            Style::default().fg(Color::Magenta),
-                        ));
-                    }
 
                     if is_current {
                         spans.insert(0, Span::styled("▸ ", Style::default().fg(Color::Cyan)));
@@ -707,8 +711,13 @@ fn run_app(
                                 state.mode = Mode::Selecting;
                             }
                             KeyCode::Char('n') => {
+                                // If annotation exists, edit it; otherwise create new
+                                let line_num = state.line_number();
+                                let ownership = state.store.get_file(&state.file_name);
+                                state.input_buffer = ownership.get_annotation(line_num)
+                                    .map(|a| a.note.clone())
+                                    .unwrap_or_default();
                                 state.mode = Mode::InputNote;
-                                state.input_buffer.clear();
                             }
                             KeyCode::Char(':') => {
                                 state.mode = Mode::Command;
@@ -787,8 +796,13 @@ fn run_app(
                                 }
                             }
                             KeyCode::Char('n') => {
+                                // If annotation exists, edit it; otherwise create new
+                                let line_num = state.line_number();
+                                let ownership = state.store.get_file(&state.file_name);
+                                state.input_buffer = ownership.get_annotation(line_num)
+                                    .map(|a| a.note.clone())
+                                    .unwrap_or_default();
                                 state.mode = Mode::InputNote;
-                                state.input_buffer.clear();
                             }
                             KeyCode::Esc => {
                                 state.select_start = None;
@@ -807,7 +821,13 @@ fn run_app(
                             }
                             KeyCode::Enter => {
                                 let note = state.input_buffer.clone();
-                                state.set_annotation(note);
+                                if note.is_empty() {
+                                    // Delete annotation if empty
+                                    let line_num = state.line_number();
+                                    state.store.get_file_mut(&state.file_name).remove_annotation(line_num);
+                                } else {
+                                    state.set_annotation(note);
+                                }
                                 state.mode = Mode::Normal;
                                 state.input_buffer.clear();
                             }

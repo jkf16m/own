@@ -1,3 +1,2 @@
-snapshot: test
-1:reviewed:hash1:alice:2024-01-20T10:00:00Z
-2:approved:hash2:bob:2024-01-20T10:05:00Z
+snapshot: 2a55ae45ad071b7b
+@1-4:testing annotation
