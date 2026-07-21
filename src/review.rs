@@ -42,6 +42,9 @@ struct ReviewState {
 
 #[derive(PartialEq)]
 enum Mode {
+    /// Read-only view mode - scroll line by line
+    View,
+    /// Annotation mode - can tag, annotate, edit
     Normal,
     InputNote,
     SelectTag,
@@ -79,7 +82,7 @@ impl ReviewState {
             viewport_height: 20,
             store,
             tags: TagStore::load(),
-            mode: Mode::Normal,
+            mode: Mode::View,
             input_buffer: String::new(),
             tag_filter: String::new(),
             tag_cursor: 0,
@@ -443,7 +446,18 @@ fn run_app(
             f.render_widget(content, chunks[1]);
 
             // Footer
-            let footer = if state.mode == Mode::InputNote {
+            let footer = if state.mode == Mode::View {
+                Paragraph::new(Line::from(vec![
+                    Span::styled("j/k", Style::default().fg(Color::Yellow)),
+                    Span::raw(" scroll  "),
+                    Span::styled("Enter", Style::default().fg(Color::Green)),
+                    Span::raw(" edit mode  "),
+                    Span::styled("A", Style::default().fg(Color::Green)),
+                    Span::raw(" accept all  "),
+                    Span::styled("q", Style::default().fg(Color::Red)),
+                    Span::raw(" quit"),
+                ]))
+            } else if state.mode == Mode::InputNote {
                 Paragraph::new(Line::from(vec![
                     Span::styled(
                         format!("Note: {}", state.input_buffer),
@@ -655,6 +669,42 @@ fn run_app(
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match state.mode {
+                        Mode::View => match key.code {
+                            // Quit
+                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => return Ok(()),
+                            // Scroll line by line
+                            KeyCode::Char('j') | KeyCode::Down => state.move_cursor(1),
+                            KeyCode::Char('k') | KeyCode::Up => state.move_cursor(-1),
+                            KeyCode::Char('g') => {
+                                state.cursor = 0;
+                                state.scroll_offset = 0;
+                            }
+                            KeyCode::Char('G') => {
+                                state.cursor = state.lines.len().saturating_sub(1);
+                                state.update_scroll();
+                            }
+                            // Enter annotation mode
+                            KeyCode::Enter | KeyCode::Char('e') => {
+                                state.mode = Mode::Normal;
+                            }
+                            // Bulk accept - tag all lines
+                            KeyCode::Char('A') => {
+                                let author = state.author.clone();
+                                for line_num in 1..=state.lines.len() {
+                                    let content = state.lines.get(line_num - 1).map(|s| s.as_str());
+                                    state.store.get_file_mut(&state.file_name).set_line(
+                                        line_num,
+                                        vec!["reviewed".to_string()],
+                                        content,
+                                        &author,
+                                    );
+                                }
+                                state.store.get_file_mut(&state.file_name).update_snapshot(&state.file_path);
+                                state.store.save()?;
+                                state.is_stale = false;
+                            }
+                            _ => {}
+                        },
                         Mode::Normal => match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                             KeyCode::Char('j') | KeyCode::Down => state.move_cursor(1),
