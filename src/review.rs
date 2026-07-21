@@ -500,6 +500,11 @@ fn run_app(
                                 state.move_cursor(-1);
                                 state.select_end = Some(state.line_number());
                             }
+                            KeyCode::Char('t') => {
+                                if let Some(tag) = state.last_tag.clone() {
+                                    state.toggle_tag_on_selection(&tag);
+                                }
+                            }
                             KeyCode::Esc => {
                                 state.select_start = None;
                                 state.select_end = None;
