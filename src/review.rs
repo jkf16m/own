@@ -426,11 +426,11 @@ fn run_app(
             let footer = if state.mode == Mode::InputNote {
                 Paragraph::new(Line::from(vec![
                     Span::styled(
-                        "Type note, ",
-                        Style::default().fg(Color::DarkGray),
+                        format!("Note: {}", state.input_buffer),
+                        Style::default().fg(Color::White),
                     ),
-                    Span::styled("Enter", Style::default().fg(Color::Yellow)),
-                    Span::raw(" to save, "),
+                    Span::styled(" │ Enter", Style::default().fg(Color::Yellow)),
+                    Span::raw(" save, "),
                     Span::styled("Esc", Style::default().fg(Color::Yellow)),
                     Span::raw(" cancel"),
                 ]))

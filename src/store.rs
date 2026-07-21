@@ -157,20 +157,20 @@ impl FileOwnership {
                 continue;
             }
 
-            // Parse review entry (multi-author)
-            if let Some(review) = ReviewEntry::parse(line) {
-                // Extract line number from the review
-                let rest = &line[1..]; // remove '@'
-                if let Some(colon_pos) = rest.find(':') {
-                    if let Ok(line_num) = rest[..colon_pos].parse::<usize>() {
-                        ownership.reviews.entry(line_num).or_default().push(review);
+            // Parse review entry (multi-author) or annotation
+            if line.starts_with('@') {
+                // Try review entry first: @line:author:timestamp:tags:note
+                if let Some(review) = ReviewEntry::parse(line) {
+                    let rest = &line[1..]; // remove '@'
+                    if let Some(colon_pos) = rest.find(':') {
+                        if let Ok(line_num) = rest[..colon_pos].parse::<usize>() {
+                            ownership.reviews.entry(line_num).or_default().push(review);
+                        }
                     }
+                } else if let Some(ann) = Annotation::parse(line) {
+                    // Try annotation: @start-end:note
+                    ownership.annotations.push(ann);
                 }
-                continue;
-            }
-
-            if let Some(ann) = Annotation::parse(line) {
-                ownership.annotations.push(ann);
             } else if let Some(entry) = LineEntry::parse(line) {
                 ownership.entries.insert(entry.line, entry);
             }
