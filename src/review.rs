@@ -364,7 +364,7 @@ fn run_app(
                 .take(state.viewport_height)
                 .map(|(i, line)| {
                     let line_num = i + 1;
-                    let is_current = line_num == state.line_number();
+                    let is_current = state.mode != Mode::View && line_num == state.line_number();
 
                     // Get tags for this line
                     let ownership = state.store.get_file(&state.file_name);
@@ -672,19 +672,23 @@ fn run_app(
                         Mode::View => match key.code {
                             // Quit
                             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => return Ok(()),
-                            // Scroll line by line
-                            KeyCode::Char('j') | KeyCode::Down => state.move_cursor(1),
-                            KeyCode::Char('k') | KeyCode::Up => state.move_cursor(-1),
+                            // Scroll line by line (no cursor, just viewport)
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                let max_scroll = state.lines.len().saturating_sub(state.viewport_height);
+                                state.scroll_offset = (state.scroll_offset + 1).min(max_scroll);
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                state.scroll_offset = state.scroll_offset.saturating_sub(1);
+                            }
                             KeyCode::Char('g') => {
-                                state.cursor = 0;
                                 state.scroll_offset = 0;
                             }
                             KeyCode::Char('G') => {
-                                state.cursor = state.lines.len().saturating_sub(1);
-                                state.update_scroll();
+                                state.scroll_offset = state.lines.len().saturating_sub(state.viewport_height);
                             }
-                            // Enter annotation mode
+                            // Enter annotation mode (cursor appears at center of screen)
                             KeyCode::Enter | KeyCode::Char('e') => {
+                                state.cursor = state.scroll_offset + state.viewport_height / 2;
                                 state.mode = Mode::Normal;
                             }
                             // Bulk accept - tag all lines
