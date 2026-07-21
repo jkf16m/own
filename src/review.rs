@@ -566,18 +566,24 @@ fn run_app(
                                 state.store.get_file_mut(&state.file_name).entries.remove(&line_num);
                             }
                             KeyCode::Char('T') => {
+                                // Always open picker to choose a tag
                                 state.mode = Mode::SelectTag;
                                 state.tag_filter.clear();
                                 state.tag_cursor = 0;
                             }
                             KeyCode::Char('t') => {
-                                if state.select_start.is_some() {
-                                    // Sync tag on selection
-                                    if let Some(tag) = state.last_tag.clone() {
-                                        state.sync_tag_on_selection(&tag);
+                                if state.last_tag.is_some() {
+                                    // Has a tag, toggle it
+                                    if state.select_start.is_some() {
+                                        state.sync_tag_on_selection(&state.last_tag.clone().unwrap());
+                                    } else {
+                                        state.toggle_tag(&state.last_tag.clone().unwrap());
                                     }
-                                } else if let Some(tag) = state.last_tag.clone() {
-                                    state.toggle_tag(&tag);
+                                } else {
+                                    // No tag selected, open picker
+                                    state.mode = Mode::SelectTag;
+                                    state.tag_filter.clear();
+                                    state.tag_cursor = 0;
                                 }
                             }
                             KeyCode::Char('r') => {
@@ -622,12 +628,8 @@ fn run_app(
                                 let filtered = state.get_filtered_tags();
                                 if let Some(tag) = filtered.get(state.tag_cursor) {
                                     state.last_tag = Some(tag.clone());
-                                    if state.select_start.is_some() {
-                                        state.sync_tag_on_selection(tag);
-                                    } else {
-                                        state.toggle_tag(tag);
-                                    }
                                 }
+                                state.mode = Mode::Normal;
                             }
                             KeyCode::Up => {
                                 state.tag_cursor = state.tag_cursor.saturating_sub(1);
