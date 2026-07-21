@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 
 // ─── Data Model ──────────────────────────────────────────────────────────────
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 #[derive(Debug, Clone)]
 pub struct LineEntry {
     pub line: usize,
@@ -20,6 +23,7 @@ pub struct Annotation {
 
 #[derive(Debug, Default)]
 pub struct FileOwnership {
+    pub snapshot: Option<String>,  // Hash of source file when reviewed
     pub entries: BTreeMap<usize, LineEntry>,
     pub annotations: Vec<Annotation>,
 }
@@ -84,7 +88,7 @@ impl Store {
     }
 
     pub fn get_file(&self, path: &str) -> &FileOwnership {
-        static EMPTY: FileOwnership = FileOwnership { entries: std::collections::BTreeMap::new(), annotations: Vec::new() };
+        static EMPTY: FileOwnership = FileOwnership { snapshot: None, entries: std::collections::BTreeMap::new(), annotations: Vec::new() };
         self.files.get(path).unwrap_or(&EMPTY)
     }
 
@@ -105,6 +109,12 @@ impl FileOwnership {
                 continue;
             }
 
+            // Parse snapshot line
+            if let Some(hash) = line.strip_prefix("snapshot: ") {
+                ownership.snapshot = Some(hash.to_string());
+                continue;
+            }
+
             if let Some(ann) = Annotation::parse(line) {
                 ownership.annotations.push(ann);
             } else if let Some(entry) = LineEntry::parse(line) {
@@ -118,15 +128,44 @@ impl FileOwnership {
     pub fn serialize(&self) -> String {
         let mut lines = Vec::new();
 
+        // Write snapshot first
+        if let Some(snapshot) = &self.snapshot {
+            lines.push(format!("snapshot: {}", snapshot));
+        }
+
+        // Write line entries
         for (_, entry) in &self.entries {
             lines.push(entry.serialize());
         }
 
+        // Write annotations
         for ann in &self.annotations {
             lines.push(ann.serialize());
         }
 
         lines.join("\n")
+    }
+
+    /// Compute hash of source file content
+    pub fn compute_snapshot(file_path: &std::path::Path) -> Option<String> {
+        let content = std::fs::read_to_string(file_path).ok()?;
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        Some(format!("{:x}", hasher.finish()))
+    }
+
+    /// Check if file has changed since last review
+    pub fn is_stale(&self, file_path: &std::path::Path) -> bool {
+        match (&self.snapshot, Self::compute_snapshot(file_path)) {
+            (Some(stored), Some(current)) => stored != &current,
+            (None, _) => false,  // No snapshot = not stale
+            (_, None) => true,   // Can't read file = stale
+        }
+    }
+
+    /// Update snapshot to current file content
+    pub fn update_snapshot(&mut self, file_path: &std::path::Path) {
+        self.snapshot = Self::compute_snapshot(file_path);
     }
 
     pub fn set_line(&mut self, line: usize, tags: Vec<String>) {

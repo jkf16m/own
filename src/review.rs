@@ -35,6 +35,8 @@ struct ReviewState {
     last_tag: Option<String>,
     select_start: Option<usize>,
     select_end: Option<usize>,
+    is_stale: bool,
+    file_path: std::path::PathBuf,
 }
 
 #[derive(PartialEq)]
@@ -55,13 +57,19 @@ impl ReviewState {
         let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
         let file_name = file_path.to_string_lossy().to_string();
 
+        let mut store = Store::load()?;
+        
+        // Check if file has changed since last review
+        let ownership = store.get_file(&file_name);
+        let is_stale = ownership.is_stale(file_path);
+        
         Ok(ReviewState {
             file_name,
             lines,
             cursor: 0,
             scroll_offset: 0,
             viewport_height: 20,
-            store: Store::load()?,
+            store,
             tags: TagStore::load(),
             mode: Mode::Normal,
             input_buffer: String::new(),
@@ -70,6 +78,8 @@ impl ReviewState {
             last_tag: None,
             select_start: None,
             select_end: None,
+            is_stale,
+            file_path: file_path.clone(),
         })
     }
 
@@ -290,6 +300,12 @@ fn run_app(
             };
 
             let mut header_spans = vec![];
+            if state.is_stale {
+                header_spans.push(Span::styled(
+                    " ⚠ FILE CHANGED ",
+                    Style::default().fg(Color::White).bg(Color::Red),
+                ));
+            }
             if !mode_str.is_empty() {
                 header_spans.push(Span::styled(
                     mode_str,
@@ -618,7 +634,11 @@ fn run_app(
                                 state.cursor = state.lines.len().saturating_sub(1);
                                 state.update_scroll();
                             }
-                            KeyCode::Char('s') => state.store.save()?,
+                            KeyCode::Char('s') => {
+                                state.store.get_file_mut(&state.file_name).update_snapshot(&state.file_path);
+                                state.store.save()?;
+                                state.is_stale = false;
+                            }
                             KeyCode::Char('d') => {
                                 let line_num = state.line_number();
                                 state.store.get_file_mut(&state.file_name).entries.remove(&line_num);
