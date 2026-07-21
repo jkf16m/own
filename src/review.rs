@@ -43,6 +43,7 @@ enum Mode {
     InputNote,
     SelectTag,
     Selecting,
+    Command,
 }
 
 impl ReviewState {
@@ -390,6 +391,12 @@ fn run_app(
                     Span::styled("Esc", Style::default().fg(Color::Yellow)),
                     Span::raw(" close"),
                 ]))
+            } else if state.mode == Mode::Command {
+                Paragraph::new(Line::from(vec![
+                    Span::styled(":", Style::default().fg(Color::White)),
+                    Span::styled(&state.input_buffer, Style::default().fg(Color::White)),
+                    Span::styled("█", Style::default().fg(Color::White)),
+                ]))
             } else {
                 let last_tag_str = match &state.last_tag {
                     Some(tag) => format!(" [{}]", tag),
@@ -406,15 +413,11 @@ fn run_app(
                     Span::styled(last_tag_str, Style::default().fg(Color::Cyan)),
                     Span::raw("  "),
                     Span::styled("T", Style::default().fg(Color::Green)),
-                    Span::raw(" pick tag  "),
+                    Span::raw(" pick  "),
                     Span::styled("n", Style::default().fg(Color::Cyan)),
                     Span::raw(" note  "),
-                    Span::styled("d", Style::default().fg(Color::Red)),
-                    Span::raw(" delete  "),
-                    Span::styled("s", Style::default().fg(Color::DarkGray)),
-                    Span::raw(" save  "),
-                    Span::styled("q", Style::default().fg(Color::DarkGray)),
-                    Span::raw(" quit"),
+                    Span::styled(":", Style::default().fg(Color::White)),
+                    Span::raw(" cmd"),
                 ]))
             };
 
@@ -512,6 +515,10 @@ fn run_app(
                                 state.mode = Mode::InputNote;
                                 state.input_buffer.clear();
                             }
+                            KeyCode::Char(':') => {
+                                state.mode = Mode::Command;
+                                state.input_buffer.clear();
+                            }
                             _ => {}
                         },
                         Mode::SelectTag => match key.code {
@@ -577,6 +584,42 @@ fn run_app(
                                 state.set_line_tags(tags, Some(note));
                                 state.mode = Mode::Normal;
                                 state.input_buffer.clear();
+                            }
+                            KeyCode::Char(c) => {
+                                state.input_buffer.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                state.input_buffer.pop();
+                            }
+                            _ => {}
+                        },
+                        Mode::Command => match key.code {
+                            KeyCode::Esc => {
+                                state.mode = Mode::Normal;
+                                state.input_buffer.clear();
+                            }
+                            KeyCode::Enter => {
+                                let cmd = state.input_buffer.trim().to_string();
+                                state.mode = Mode::Normal;
+                                state.input_buffer.clear();
+                                
+                                match cmd.as_str() {
+                                    "q" | "quit" => return Ok(()),
+                                    "w" | "save" => {
+                                        state.store.save()?;
+                                    }
+                                    "wq" | "wq" => {
+                                        state.store.save()?;
+                                        return Ok(());
+                                    }
+                                    "d" | "delete" => {
+                                        let line_num = state.line_number();
+                                        state.store.get_file_mut(&state.file_name).entries.remove(&line_num);
+                                    }
+                                    _ => {
+                                        // Unknown command, ignore
+                                    }
+                                }
                             }
                             KeyCode::Char(c) => {
                                 state.input_buffer.push(c);
