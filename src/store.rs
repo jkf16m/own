@@ -196,16 +196,28 @@ pub fn status() -> Result<()> {
     println!("=== Ownership Status ===\n");
 
     for (file, ownership) in &store.files {
+        // Read source file to check for empty lines
+        let source = std::fs::read_to_string(file).unwrap_or_default();
+        let lines: Vec<&str> = source.lines().collect();
+
         let total = ownership.entries.len();
         let reviewed = ownership.entries.values()
-            .filter(|e| e.tags.contains(&"r".to_string()))
-            .count();
-        let approved = ownership.entries.values()
-            .filter(|e| e.tags.contains(&"a".to_string()))
+            .filter(|e| {
+                // Skip empty lines
+                if let Some(line_content) = lines.get(e.line - 1) {
+                    if line_content.trim().is_empty() {
+                        return false;
+                    }
+                }
+                e.tags.contains(&"r".to_string()) || e.tags.contains(&"a".to_string())
+            })
             .count();
 
-        let pct = if total > 0 {
-            (reviewed + approved) as f64 / total as f64 * 100.0
+        // Count non-empty lines
+        let non_empty = lines.iter().filter(|l| !l.trim().is_empty()).count();
+
+        let pct = if non_empty > 0 {
+            reviewed as f64 / non_empty as f64 * 100.0
         } else {
             0.0
         };
