@@ -216,8 +216,6 @@ pub fn run(file_path: &Path) -> Result<()> {
     )?;
     terminal.show_cursor()?;
 
-    state.store.save()?;
-
     if let Err(err) = result {
         eprintln!("Error: {}", err);
     }

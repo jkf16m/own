@@ -117,10 +117,10 @@ fn generate_color(name: &str) -> String {
     name.hash(&mut hasher);
     let hash = hasher.finish();
 
-    // Generate HSL with high saturation and medium lightness
-    let hue = (hash % 360) as u16;
-    let saturation = 70 + (hash % 20) as u16; // 70-89%
-    let lightness = 45 + (hash % 15) as u16; // 45-59%
+    // Use different bits for more variety
+    let hue = ((hash >> 8) % 360) as u16;
+    let saturation = 70 + ((hash >> 16) % 20) as u16; // 70-89%
+    let lightness = 45 + ((hash >> 24) % 15) as u16; // 45-59%
 
     format!("hsl({}, {}%, {}%)", hue, saturation, lightness)
 }
