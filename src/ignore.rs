@@ -9,10 +9,12 @@ pub fn should_ignore(path: &Path, repo_root: &Path) -> bool {
     // Get relative path from repo root
     let rel_path = path.strip_prefix(repo_root).unwrap_or(path);
     let path_str = rel_path.to_string_lossy();
+    // Normalize: remove leading ./
+    let path_str = path_str.strip_prefix("./").unwrap_or(&path_str);
 
     for pattern in &patterns {
         // Check full path
-        if pattern.matches(&path_str) {
+        if pattern.matches(path_str) {
             return true;
         }
         

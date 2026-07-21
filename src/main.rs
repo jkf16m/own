@@ -40,6 +40,11 @@ enum Commands {
         /// Specific file to extract from (optional, otherwise all files)
         file: Option<PathBuf>,
     },
+    /// Remove files from tracking
+    Remove {
+        /// File or directory to remove from tracking
+        path: PathBuf,
+    },
     /// Initialize .own directory
     Init,
 }
@@ -67,6 +72,9 @@ fn main() -> Result<()> {
                 own::ExtractState::Rejected // default
             };
             own::extract(state, file.as_deref())?;
+        }
+        Commands::Remove { path } => {
+            own::remove(&path)?;
         }
         Commands::Init => {
             own::init()?;

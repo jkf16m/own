@@ -1024,7 +1024,74 @@ pub fn init() -> Result<()> {
     Ok(())
 }
 
-// ─── Scan Command ────────────────────────────────────────────────────────────
+// ─── Remove Command ─────────────────────────────────────────────────────────
+
+pub fn remove(path: &Path) -> Result<()> {
+    let mut store = OwnershipStore::load()?;
+    let repo_root = std::env::current_dir()?;
+    
+    // Get the path to remove
+    let target = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        repo_root.join(path)
+    };
+    
+    let mut removed = Vec::new();
+    
+    // Check if it's a specific file
+    if target.is_file() {
+        let file_str = target
+            .strip_prefix(&repo_root)
+            .unwrap_or(&target)
+            .to_string_lossy()
+            .to_string();
+        
+        if store.files.remove(&file_str).is_some() {
+            removed.push(file_str.clone());
+            // Also remove the .own file
+            let own_path = PathBuf::from(".own").join(format!("{}.own", file_str));
+            if own_path.exists() {
+                fs::remove_file(&own_path)?;
+            }
+        }
+    } else if target.is_dir() {
+        // Remove all files in directory
+        let prefix = target
+            .strip_prefix(&repo_root)
+            .unwrap_or(&target)
+            .to_string_lossy()
+            .to_string();
+        
+        let keys_to_remove: Vec<String> = store.files.keys()
+            .filter(|k| k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        
+        for key in keys_to_remove {
+            store.files.remove(&key);
+            removed.push(key.clone());
+            // Remove .own file
+            let own_path = PathBuf::from(".own").join(format!("{}.own", key));
+            if own_path.exists() {
+                fs::remove_file(&own_path)?;
+            }
+        }
+    }
+    
+    if removed.is_empty() {
+        println!("No tracked files found for: {}", path.display());
+    } else {
+        println!("Removed {} files from tracking:", removed.len());
+        for file in &removed {
+            println!("  {}", file);
+        }
+    }
+    
+    Ok(())
+}
+
+// ─── Add Command ────────────────────────────────────────────────────────────
 
 pub fn add(dir: &Path) -> Result<()> {
     let store = OwnershipStore::load()?;
