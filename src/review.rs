@@ -581,9 +581,9 @@ fn run_app(
                                 }
                             }
                             KeyCode::Char('r') => {
-                                state.mode = Mode::SelectTagRemove;
-                                state.tag_filter.clear();
-                                state.tag_cursor = 0;
+                                if let Some(tag) = state.last_tag.clone() {
+                                    state.remove_tag(&tag);
+                                }
                             }
                             KeyCode::Char('v') => {
                                 state.select_start = Some(state.line_number());
