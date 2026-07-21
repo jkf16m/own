@@ -32,6 +32,7 @@ struct ReviewState {
     input_buffer: String,
     tag_filter: String,
     tag_cursor: usize,
+    last_tag: Option<String>,
 }
 
 #[derive(PartialEq)]
@@ -60,6 +61,7 @@ impl ReviewState {
             input_buffer: String::new(),
             tag_filter: String::new(),
             tag_cursor: 0,
+            last_tag: None,
         })
     }
 
@@ -281,11 +283,20 @@ fn run_app(
                     Span::raw(" close"),
                 ]))
             } else {
+                let last_tag_str = match &state.last_tag {
+                    Some(tag) => format!(" [{}]", tag),
+                    None => String::new(),
+                };
+
                 Paragraph::new(Line::from(vec![
                     Span::styled("j/k", Style::default().fg(Color::Yellow)),
                     Span::raw(" move  "),
                     Span::styled("t", Style::default().fg(Color::Green)),
-                    Span::raw(" tag  "),
+                    Span::raw(" toggle"),
+                    Span::styled(last_tag_str, Style::default().fg(Color::Cyan)),
+                    Span::raw("  "),
+                    Span::styled("T", Style::default().fg(Color::Green)),
+                    Span::raw(" select tag  "),
                     Span::styled("n", Style::default().fg(Color::Cyan)),
                     Span::raw(" note  "),
                     Span::styled("d", Style::default().fg(Color::Red)),
@@ -367,10 +378,15 @@ fn run_app(
                                 let line_num = state.line_number();
                                 state.store.get_file_mut(&state.file_name).entries.remove(&line_num);
                             }
-                            KeyCode::Char('t') => {
+                            KeyCode::Char('T') => {
                                 state.mode = Mode::SelectTag;
                                 state.tag_filter.clear();
                                 state.tag_cursor = 0;
+                            }
+                            KeyCode::Char('t') => {
+                                if let Some(tag) = state.last_tag.clone() {
+                                    state.toggle_tag(&tag);
+                                }
                             }
                             KeyCode::Char('n') => {
                                 state.mode = Mode::InputNote;
@@ -385,6 +401,7 @@ fn run_app(
                             KeyCode::Enter => {
                                 let filtered = state.get_filtered_tags();
                                 if let Some(tag) = filtered.get(state.tag_cursor) {
+                                    state.last_tag = Some(tag.clone());
                                     state.toggle_tag(tag);
                                 }
                             }
