@@ -157,6 +157,41 @@ impl ReviewState {
     }
 }
 
+fn parse_color(color: &str) -> Color {
+    if color.starts_with('#') && color.len() == 7 {
+        let r = u8::from_str_radix(&color[1..3], 16).unwrap_or(0);
+        let g = u8::from_str_radix(&color[3..5], 16).unwrap_or(0);
+        let b = u8::from_str_radix(&color[5..7], 16).unwrap_or(0);
+        Color::Rgb(r, g, b)
+    } else if color.starts_with("hsl(") {
+        // Simple HSL to RGB conversion
+        let parts: Vec<&str> = color.trim_start_matches("hsl(").trim_end_matches(')').split(',').collect();
+        if parts.len() == 3 {
+            let h: f64 = parts[0].trim().trim_end_matches('°').parse().unwrap_or(0.0);
+            let s: f64 = parts[1].trim().trim_end_matches('%').parse().unwrap_or(0.0) / 100.0;
+            let l: f64 = parts[2].trim().trim_end_matches('%').parse().unwrap_or(0.0) / 100.0;
+            let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+            let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+            let m = l - c / 2.0;
+            let (r, g, b) = if h < 60.0 { (c, x, 0.0) }
+                else if h < 120.0 { (x, c, 0.0) }
+                else if h < 180.0 { (0.0, c, x) }
+                else if h < 240.0 { (0.0, x, c) }
+                else if h < 300.0 { (x, 0.0, c) }
+                else { (c, 0.0, x) };
+            Color::Rgb(
+                ((r + m) * 255.0) as u8,
+                ((g + m) * 255.0) as u8,
+                ((b + m) * 255.0) as u8,
+            )
+        } else {
+            Color::White
+        }
+    } else {
+        Color::White
+    }
+}
+
 // ─── TUI ─────────────────────────────────────────────────────────────────────
 
 pub fn run(file_path: &Path) -> Result<()> {
@@ -239,7 +274,19 @@ fn run_app(
                 format!(" Line {}/{}", line_num, state.lines.len()),
                 Style::default().fg(Color::White),
             ));
-            header_spans.push(Span::styled(tags_str, Style::default().fg(Color::Cyan)));
+            
+            // Show tag names with colors
+            for tag_name in &tags {
+                header_spans.push(Span::raw(" "));
+                let color = state.tags.tags.get(tag_name)
+                    .map(|t| parse_color(&t.color))
+                    .unwrap_or(Color::White);
+                header_spans.push(Span::styled(
+                    format!("●{}", tag_name),
+                    Style::default().fg(color),
+                ));
+            }
+            
             header_spans.push(Span::raw("  "));
             header_spans.push(Span::styled(
                 state.file_name.clone(),
@@ -267,18 +314,21 @@ fn run_app(
                     let has_tags = entry.map(|e| !e.tags.is_empty()).unwrap_or(false);
                     let note = entry.and_then(|e| e.note.as_ref());
 
-                    // Build marker
-                    let marker = if has_tags {
-                        let tag_str = entry.unwrap().tags.iter()
-                            .map(|t| &t[..t.len().min(3)])
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        Span::styled(
-                            format!("{:>3}", tag_str),
-                            Style::default().fg(Color::Cyan),
-                        )
+                    // Build marker - colored dots for tags
+                    let marker_spans: Vec<Span> = if has_tags {
+                        let mut dots: Vec<Span> = entry.unwrap().tags.iter().take(3).map(|t| {
+                            let color = state.tags.tags.get(t)
+                                .map(|tag| parse_color(&tag.color))
+                                .unwrap_or(Color::White);
+                            Span::styled("●", Style::default().fg(color))
+                        }).collect();
+                        // Pad to 3 chars
+                        while dots.len() < 3 {
+                            dots.insert(0, Span::raw(" "));
+                        }
+                        dots
                     } else {
-                        Span::raw("   ")
+                        vec![Span::raw("   ")]
                     };
 
                     let in_selection = state.is_in_selection(line_num);
@@ -292,10 +342,10 @@ fn run_app(
 
                     let mut spans = vec![
                         Span::styled(format!("{:>4} ", line_num), line_style),
-                        marker,
-                        Span::raw(" │ "),
-                        Span::styled(line.clone(), line_style),
                     ];
+                    spans.extend(marker_spans);
+                    spans.push(Span::raw(" │ "));
+                    spans.push(Span::styled(line.clone(), line_style));
 
                     if let Some(note) = note {
                         spans.push(Span::styled(
