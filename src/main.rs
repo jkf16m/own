@@ -42,8 +42,8 @@ enum TagCommands {
     Create {
         /// Tag name
         name: String,
-        /// Color (hex, e.g. #ff0000)
-        color: String,
+        /// Color (hex, e.g. #ff0000 or hsl). Auto-generated if not provided.
+        color: Option<String>,
     },
     /// Delete a tag
     Delete {
@@ -61,7 +61,7 @@ fn main() -> Result<()> {
         Commands::Status => store::status(),
         Commands::Tags { command } => match command {
             TagCommands::List => tags::list(),
-            TagCommands::Create { name, color } => tags::create(&name, &color),
+            TagCommands::Create { name, color } => tags::create(&name, color.as_deref()),
             TagCommands::Delete { name } => tags::delete(&name),
         },
     }

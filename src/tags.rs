@@ -84,24 +84,45 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-pub fn create(name: &str, color: &str) -> Result<()> {
+pub fn create(name: &str, color: Option<&str>) -> Result<()> {
     let mut store = TagStore::load();
 
     if store.tags.contains_key(name) {
         anyhow::bail!("Tag already exists: {}", name);
     }
 
+    let final_color = match color {
+        Some(c) => c.to_string(),
+        None => generate_color(name),
+    };
+
     store.tags.insert(
         name.to_string(),
         Tag {
             name: name.to_string(),
-            color: color.to_string(),
+            color: final_color.clone(),
         },
     );
     store.save()?;
 
-    println!("Created tag: {} ({})", name, color);
+    println!("Created tag: {} ({})", name, final_color);
     Ok(())
+}
+
+fn generate_color(name: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    // Generate HSL with high saturation and medium lightness
+    let hue = (hash % 360) as u16;
+    let saturation = 70 + (hash % 20) as u16; // 70-89%
+    let lightness = 45 + (hash % 15) as u16; // 45-59%
+
+    format!("hsl({}, {}%, {}%)", hue, saturation, lightness)
 }
 
 pub fn delete(name: &str) -> Result<()> {

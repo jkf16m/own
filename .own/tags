@@ -1,3 +1,4 @@
-approved:#0088ff
-rejected:#ff0000
-reviewed:#00ff00
+approved:hsl(249, 79%, 54%)
+reviewed:hsl(239, 89%, 59%)
+security:hsl(219, 89%, 54%)
+urgent:#ff0000
