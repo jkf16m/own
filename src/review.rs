@@ -582,7 +582,21 @@ fn run_app(
                             }
                             KeyCode::Char('r') => {
                                 if let Some(tag) = state.last_tag.clone() {
-                                    state.remove_tag(&tag);
+                                    if state.select_start.is_some() {
+                                        // Remove from selection
+                                        let start = state.select_start.unwrap();
+                                        let end = state.select_end.unwrap_or(start);
+                                        let min = start.min(end);
+                                        let max = start.max(end);
+                                        for line_num in min..=max {
+                                            let entry = state.store.get_file(&state.file_name).entries.get(&line_num);
+                                            let mut tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
+                                            tags.retain(|t| t != &tag);
+                                            state.store.get_file_mut(&state.file_name).set_line(line_num, tags, None);
+                                        }
+                                    } else {
+                                        state.remove_tag(&tag);
+                                    }
                                 }
                             }
                             KeyCode::Char('v') => {
