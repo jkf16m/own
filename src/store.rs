@@ -139,10 +139,11 @@ impl FileOwnership {
             format!("{:x}", hasher.finish())
         }).collect();
 
-        // Build map: content_hash -> line_number for new file
+        // Build map: content_hash -> line_number for new file (first occurrence)
         let mut hash_to_line: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for (i, hash) in new_hashes.iter().enumerate() {
-            hash_to_line.insert(hash.clone(), i + 1); // 1-based
+            // Only insert first occurrence
+            hash_to_line.entry(hash.clone()).or_insert(i + 1); // 1-based
         }
 
         // Try to re-anchor each entry
@@ -475,6 +476,317 @@ fn extract_json(store: &Store) -> Result<()> {
 
     println!("{}", serde_json::to_string_pretty(&output)?);
     Ok(())
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_line_entry_parse_simple() {
+        let entry = LineEntry::parse("5:reviewed").unwrap();
+        assert_eq!(entry.line, 5);
+        assert_eq!(entry.tags, vec!["reviewed"]);
+        assert!(entry.content_hash.is_none());
+    }
+
+    #[test]
+    fn test_line_entry_parse_multiple_tags() {
+        let entry = LineEntry::parse("10:reviewed,approved").unwrap();
+        assert_eq!(entry.line, 10);
+        assert_eq!(entry.tags, vec!["reviewed", "approved"]);
+    }
+
+    #[test]
+    fn test_line_entry_parse_with_hash() {
+        let entry = LineEntry::parse("3:r,a:abc123def").unwrap();
+        assert_eq!(entry.line, 3);
+        assert_eq!(entry.tags, vec!["r", "a"]);
+        assert_eq!(entry.content_hash, Some("abc123def".to_string()));
+    }
+
+    #[test]
+    fn test_line_entry_parse_invalid() {
+        assert!(LineEntry::parse("invalid").is_none());
+        assert!(LineEntry::parse("abc:def").is_none());
+        assert!(LineEntry::parse("").is_none());
+    }
+
+    #[test]
+    fn test_line_entry_serialize_simple() {
+        let entry = LineEntry {
+            line: 5,
+            tags: vec!["reviewed".to_string()],
+            content_hash: None,
+        };
+        assert_eq!(entry.serialize(), "5:reviewed");
+    }
+
+    #[test]
+    fn test_line_entry_serialize_with_hash() {
+        let entry = LineEntry {
+            line: 10,
+            tags: vec!["r".to_string(), "a".to_string()],
+            content_hash: Some("abc123".to_string()),
+        };
+        assert_eq!(entry.serialize(), "10:r,a:abc123");
+    }
+
+    #[test]
+    fn test_line_entry_roundtrip() {
+        let original = "7:reviewed,approved:hash123";
+        let entry = LineEntry::parse(original).unwrap();
+        let serialized = entry.serialize();
+        assert_eq!(original, serialized);
+    }
+
+    #[test]
+    fn test_line_entry_with_content() {
+        let entry = LineEntry::with_content(1, vec!["test".to_string()], "hello world");
+        assert_eq!(entry.line, 1);
+        assert_eq!(entry.tags, vec!["test"]);
+        assert!(entry.content_hash.is_some());
+        // Same content should produce same hash
+        let entry2 = LineEntry::with_content(2, vec!["test".to_string()], "hello world");
+        assert_eq!(entry.content_hash, entry2.content_hash);
+    }
+
+    #[test]
+    fn test_annotation_parse() {
+        let ann = Annotation::parse("@5-10:this is a note").unwrap();
+        assert_eq!(ann.start_line, 5);
+        assert_eq!(ann.end_line, 10);
+        assert_eq!(ann.note, "this is a note");
+    }
+
+    #[test]
+    fn test_annotation_parse_single_line() {
+        let ann = Annotation::parse("@3-3:single line note").unwrap();
+        assert_eq!(ann.start_line, 3);
+        assert_eq!(ann.end_line, 3);
+    }
+
+    #[test]
+    fn test_annotation_parse_invalid() {
+        assert!(Annotation::parse("invalid").is_none());
+        assert!(Annotation::parse("5-10:note").is_none());
+        assert!(Annotation::parse("@5:note").is_none());
+        assert!(Annotation::parse("").is_none());
+    }
+
+    #[test]
+    fn test_annotation_serialize() {
+        let ann = Annotation {
+            start_line: 5,
+            end_line: 10,
+            note: "test note".to_string(),
+        };
+        assert_eq!(ann.serialize(), "@5-10:test note");
+    }
+
+    #[test]
+    fn test_annotation_roundtrip() {
+        let original = "@1-5:important code";
+        let ann = Annotation::parse(original).unwrap();
+        assert_eq!(ann.serialize(), original);
+    }
+
+    #[test]
+    fn test_file_ownership_parse_empty() {
+        let ownership = FileOwnership::parse("");
+        assert!(ownership.snapshot.is_none());
+        assert!(ownership.entries.is_empty());
+        assert!(ownership.annotations.is_empty());
+    }
+
+    #[test]
+    fn test_file_ownership_parse_full() {
+        let content = "snapshot: abc123\n1:reviewed\n2:approved:hash\n@5-10:note";
+        let ownership = FileOwnership::parse(content);
+        assert_eq!(ownership.snapshot, Some("abc123".to_string()));
+        assert_eq!(ownership.entries.len(), 2);
+        assert_eq!(ownership.annotations.len(), 1);
+    }
+
+    #[test]
+    fn test_file_ownership_serialize() {
+        let mut ownership = FileOwnership::default();
+        ownership.snapshot = Some("test123".to_string());
+        ownership.entries.insert(1, LineEntry {
+            line: 1,
+            tags: vec!["reviewed".to_string()],
+            content_hash: None,
+        });
+        let serialized = ownership.serialize();
+        assert!(serialized.contains("snapshot: test123"));
+        assert!(serialized.contains("1:reviewed"));
+    }
+
+    #[test]
+    fn test_file_ownership_set_line() {
+        let mut ownership = FileOwnership::default();
+        
+        // Add line with content
+        ownership.set_line(5, vec!["reviewed".to_string()], Some("hello"));
+        assert!(ownership.entries.contains_key(&5));
+        assert!(ownership.entries[&5].content_hash.is_some());
+        
+        // Update line without content (should preserve hash)
+        let old_hash = ownership.entries[&5].content_hash.clone();
+        ownership.set_line(5, vec!["approved".to_string()], None);
+        assert_eq!(ownership.entries[&5].tags, vec!["approved"]);
+        assert_eq!(ownership.entries[&5].content_hash, old_hash);
+        
+        // Remove line
+        ownership.set_line(5, vec![], None);
+        assert!(!ownership.entries.contains_key(&5));
+    }
+
+    #[test]
+    fn test_file_ownership_reanchor_no_snapshot() {
+        let mut ownership = FileOwnership::default();
+        ownership.entries.insert(1, LineEntry {
+            line: 1,
+            tags: vec!["test".to_string()],
+            content_hash: Some("hash".to_string()),
+        });
+        
+        let lines = vec!["new content".to_string()];
+        ownership.reanchor(&lines);
+        
+        // Without snapshot, should not change
+        assert!(ownership.entries.contains_key(&1));
+    }
+
+    #[test]
+    fn test_file_ownership_reanchor_with_snapshot() {
+        let mut ownership = FileOwnership::default();
+        ownership.snapshot = Some("old_hash".to_string());
+        
+        // Add entry with content hash matching "line2"
+        let entry = LineEntry::with_content(2, vec!["reviewed".to_string()], "line2");
+        ownership.entries.insert(2, entry);
+        
+        // New file: line1, NEW_LINE, line2
+        let lines = vec![
+            "line1".to_string(),
+            "NEW_LINE".to_string(),
+            "line2".to_string(),
+        ];
+        
+        ownership.reanchor(&lines);
+        
+        // Entry should move from line 2 to line 3
+        assert!(!ownership.entries.contains_key(&2));
+        assert!(ownership.entries.contains_key(&3));
+        assert_eq!(ownership.entries[&3].tags, vec!["reviewed"]);
+    }
+
+    #[test]
+    fn test_file_ownership_reanchor_deleted_line() {
+        let mut ownership = FileOwnership::default();
+        ownership.snapshot = Some("old_hash".to_string());
+        
+        // Add entry for "deleted_line"
+        let entry = LineEntry::with_content(2, vec!["test".to_string()], "deleted_line");
+        ownership.entries.insert(2, entry);
+        
+        // New file without that line
+        let lines = vec![
+            "line1".to_string(),
+            "line3".to_string(),
+        ];
+        
+        ownership.reanchor(&lines);
+        
+        // Entry should stay at original line (content not found)
+        assert!(ownership.entries.contains_key(&2));
+    }
+
+    #[test]
+    fn test_file_ownership_reanchor_duplicate_content() {
+        let mut ownership = FileOwnership::default();
+        ownership.snapshot = Some("old_hash".to_string());
+        
+        // Add entry for "same_line"
+        let entry = LineEntry::with_content(1, vec!["test".to_string()], "same_line");
+        ownership.entries.insert(1, entry);
+        
+        // New file with duplicate content
+        let lines = vec![
+            "same_line".to_string(),
+            "other".to_string(),
+            "same_line".to_string(),
+        ];
+        
+        ownership.reanchor(&lines);
+        
+        // Should match first occurrence
+        assert!(ownership.entries.contains_key(&1));
+        assert!(!ownership.entries.contains_key(&3));
+    }
+
+    #[test]
+    fn test_file_ownership_reanchor_multiple_entries() {
+        let mut ownership = FileOwnership::default();
+        ownership.snapshot = Some("old_hash".to_string());
+        
+        // Add multiple entries
+        ownership.entries.insert(1, LineEntry::with_content(1, vec!["a".to_string()], "line1"));
+        ownership.entries.insert(3, LineEntry::with_content(3, vec!["b".to_string()], "line3"));
+        
+        // New file: line0, line1, line2, line3
+        let lines = vec![
+            "line0".to_string(),
+            "line1".to_string(),
+            "line2".to_string(),
+            "line3".to_string(),
+        ];
+        
+        ownership.reanchor(&lines);
+        
+        // line1 should move from 1->2, line3 should move from 3->4
+        assert!(!ownership.entries.contains_key(&1));
+        assert!(ownership.entries.contains_key(&2));
+        assert!(!ownership.entries.contains_key(&3));
+        assert!(ownership.entries.contains_key(&4));
+        assert_eq!(ownership.entries[&2].tags, vec!["a"]);
+        assert_eq!(ownership.entries[&4].tags, vec!["b"]);
+    }
+
+    #[test]
+    fn test_store_get_file_default() {
+        let store = Store::default();
+        let file = store.get_file("nonexistent");
+        assert!(file.entries.is_empty());
+        assert!(file.annotations.is_empty());
+    }
+
+    #[test]
+    fn test_hash_consistency() {
+        // Same content should produce same hash
+        let hash1 = {
+            let mut hasher = DefaultHasher::new();
+            "test content".hash(&mut hasher);
+            format!("{:x}", hasher.finish())
+        };
+        let hash2 = {
+            let mut hasher = DefaultHasher::new();
+            "test content".hash(&mut hasher);
+            format!("{:x}", hasher.finish())
+        };
+        assert_eq!(hash1, hash2);
+        
+        // Different content should produce different hash
+        let hash3 = {
+            let mut hasher = DefaultHasher::new();
+            "different content".hash(&mut hasher);
+            format!("{:x}", hasher.finish())
+        };
+        assert_ne!(hash1, hash3);
+    }
 }
 
 fn extract_markdown(store: &Store) -> Result<()> {
