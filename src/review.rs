@@ -59,9 +59,16 @@ impl ReviewState {
 
         let mut store = Store::load()?;
         
-        // Check if file has changed since last review
-        let ownership = store.get_file(&file_name);
-        let is_stale = ownership.is_stale(file_path);
+        // Check if file has changed since last review and re-anchor if needed
+        let is_stale = {
+            let ownership = store.get_file(&file_name);
+            ownership.is_stale(file_path)
+        };
+        
+        if is_stale {
+            let ownership = store.get_file_mut(&file_name);
+            ownership.reanchor(&lines);
+        }
         
         Ok(ReviewState {
             file_name,
@@ -98,9 +105,10 @@ impl ReviewState {
 
     fn set_line_tags(&mut self, tags: Vec<String>) {
         let line_num = self.line_number();
+        let content = self.lines.get(line_num - 1).map(|s| s.as_str());
         self.store
             .get_file_mut(&self.file_name)
-            .set_line(line_num, tags);
+            .set_line(line_num, tags, content);
     }
 
     fn toggle_tag(&mut self, tag: &str) {
@@ -135,6 +143,7 @@ impl ReviewState {
         for line_num in min..=max {
             let entry = self.store.get_file(&self.file_name).entries.get(&line_num);
             let mut tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
+            let content = self.lines.get(line_num - 1).map(|s| s.as_str());
             
             if all_have {
                 tags.retain(|t| t != tag);
@@ -142,7 +151,7 @@ impl ReviewState {
                 tags.push(tag.to_string());
             }
             
-            self.store.get_file_mut(&self.file_name).set_line(line_num, tags);
+            self.store.get_file_mut(&self.file_name).set_line(line_num, tags, content);
         }
     }
 
@@ -675,8 +684,9 @@ fn run_app(
                                         for line_num in min..=max {
                                             let entry = state.store.get_file(&state.file_name).entries.get(&line_num);
                                             let mut tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
+                                            let content = state.lines.get(line_num - 1).map(|s| s.as_str());
                                             tags.retain(|t| t != &tag);
-                                            state.store.get_file_mut(&state.file_name).set_line(line_num, tags);
+                                            state.store.get_file_mut(&state.file_name).set_line(line_num, tags, content);
                                         }
                                     } else {
                                         state.remove_tag(&tag);

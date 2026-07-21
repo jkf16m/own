@@ -12,6 +12,7 @@ use std::hash::{Hash, Hasher};
 pub struct LineEntry {
     pub line: usize,
     pub tags: Vec<String>,
+    pub content_hash: Option<String>,  // Hash of line content for tracking
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +126,59 @@ impl FileOwnership {
         ownership
     }
 
+    /// Re-anchor annotations to new file content
+    pub fn reanchor(&mut self, new_lines: &[String]) {
+        let Some(old_snapshot) = &self.snapshot else {
+            return; // No snapshot to compare
+        };
+
+        // Compute hash of each new line
+        let new_hashes: Vec<String> = new_lines.iter().map(|l| {
+            let mut hasher = DefaultHasher::new();
+            l.hash(&mut hasher);
+            format!("{:x}", hasher.finish())
+        }).collect();
+
+        // Build map: content_hash -> line_number for new file
+        let mut hash_to_line: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (i, hash) in new_hashes.iter().enumerate() {
+            hash_to_line.insert(hash.clone(), i + 1); // 1-based
+        }
+
+        // Try to re-anchor each entry
+        let mut new_entries = BTreeMap::new();
+        for (old_line, entry) in &self.entries {
+            if let Some(ref content_hash) = entry.content_hash {
+                // Find where this content is now
+                if let Some(&new_line) = hash_to_line.get(content_hash) {
+                    // Content found at new line
+                    let mut new_entry = entry.clone();
+                    new_entry.line = new_line;
+                    new_entries.insert(new_line, new_entry);
+                    // Remove from map to prevent double-matching
+                    hash_to_line.remove(content_hash);
+                } else {
+                    // Content deleted - keep at original line (may be wrong)
+                    new_entries.insert(*old_line, entry.clone());
+                }
+            } else {
+                // No content hash - keep at original line
+                new_entries.insert(*old_line, entry.clone());
+            }
+        }
+
+        self.entries = new_entries;
+
+        // Re-anchor annotations similarly
+        let mut new_annotations = Vec::new();
+        for ann in &self.annotations {
+            // For now, keep annotations at same relative position
+            // TODO: use selected_text for better re-anchoring
+            new_annotations.push(ann.clone());
+        }
+        self.annotations = new_annotations;
+    }
+
     pub fn serialize(&self) -> String {
         let mut lines = Vec::new();
 
@@ -168,11 +222,23 @@ impl FileOwnership {
         self.snapshot = Self::compute_snapshot(file_path);
     }
 
-    pub fn set_line(&mut self, line: usize, tags: Vec<String>) {
+    pub fn set_line(&mut self, line: usize, tags: Vec<String>, content: Option<&str>) {
         if tags.is_empty() {
             self.entries.remove(&line);
         } else {
-            self.entries.insert(line, LineEntry { line, tags });
+            let entry = match content {
+                Some(c) => LineEntry::with_content(line, tags, c),
+                None => {
+                    // Try to preserve existing content hash
+                    let existing = self.entries.get(&line).and_then(|e| e.content_hash.clone());
+                    LineEntry {
+                        line,
+                        tags,
+                        content_hash: existing,
+                    }
+                }
+            };
+            self.entries.insert(line, entry);
         }
     }
 
@@ -194,20 +260,45 @@ impl FileOwnership {
 
 impl LineEntry {
     pub fn parse(line: &str) -> Option<Self> {
-        // Format: 5:r,approved
-        let parts: Vec<&str> = line.splitn(2, ':').collect();
+        // Format: 5:r,approved:content_hash
+        // or: 5:r,approved
+        let parts: Vec<&str> = line.splitn(3, ':').collect();
         if parts.len() < 2 {
             return None;
         }
 
         let line_num: usize = parts[0].parse().ok()?;
         let tags: Vec<String> = parts[1].split(',').map(|s| s.trim().to_string()).collect();
+        let content_hash = if parts.len() > 2 && !parts[2].is_empty() {
+            Some(parts[2].to_string())
+        } else {
+            None
+        };
 
-        Some(LineEntry { line: line_num, tags })
+        Some(LineEntry {
+            line: line_num,
+            tags,
+            content_hash,
+        })
     }
 
     pub fn serialize(&self) -> String {
-        format!("{}:{}", self.line, self.tags.join(","))
+        match &self.content_hash {
+            Some(hash) => format!("{}:{}:{}", self.line, self.tags.join(","), hash),
+            None => format!("{}:{}", self.line, self.tags.join(",")),
+        }
+    }
+
+    /// Create entry with content hash from line content
+    pub fn with_content(line: usize, tags: Vec<String>, content: &str) -> Self {
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        let content_hash = format!("{:x}", hasher.finish());
+        LineEntry {
+            line,
+            tags,
+            content_hash: Some(content_hash),
+        }
     }
 }
 
