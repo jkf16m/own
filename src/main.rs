@@ -27,6 +27,12 @@ enum Commands {
     },
     /// Show ownership status
     Status,
+    /// Extract ownership data
+    Extract {
+        /// Output format: md (markdown) or json
+        #[arg(short, long, default_value = "md")]
+        format: String,
+    },
     /// Manage tags
     Tags {
         #[command(subcommand)]
@@ -59,6 +65,7 @@ fn main() -> Result<()> {
         Commands::Add { file } => store::add(&file),
         Commands::Review { file } => review::run(&file),
         Commands::Status => store::status(),
+        Commands::Extract { format } => store::extract(&format),
         Commands::Tags { command } => match command {
             TagCommands::List => tags::list(),
             TagCommands::Create { name, color } => tags::create(&name, color.as_deref()),

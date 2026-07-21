@@ -268,3 +268,156 @@ pub fn status() -> Result<()> {
 
     Ok(())
 }
+
+pub fn extract(format: &str) -> Result<()> {
+    let store = Store::load()?;
+
+    if store.files.is_empty() {
+        println!("No files tracked.");
+        return Ok(());
+    }
+
+    match format {
+        "json" => extract_json(&store),
+        _ => extract_markdown(&store),
+    }
+}
+
+fn extract_json(store: &Store) -> Result<()> {
+    let mut total_lines = 0;
+    let mut total_reviewed = 0;
+    let mut files = Vec::new();
+
+    for (file, ownership) in &store.files {
+        let source = std::fs::read_to_string(file).unwrap_or_default();
+        let lines: Vec<&str> = source.lines().collect();
+        let non_empty = lines.iter().filter(|l| !l.trim().is_empty()).count();
+
+        let reviewed = ownership.entries.values()
+            .filter(|e| {
+                if let Some(line_content) = lines.get(e.line - 1) {
+                    if line_content.trim().is_empty() {
+                        return false;
+                    }
+                }
+                e.tags.contains(&"r".to_string()) || e.tags.contains(&"a".to_string())
+            })
+            .count();
+
+        total_lines += non_empty;
+        total_reviewed += reviewed;
+
+        let pct = if non_empty > 0 {
+            reviewed as f64 / non_empty as f64 * 100.0
+        } else {
+            0.0
+        };
+
+        let annotations: Vec<serde_json::Value> = ownership.annotations.iter().map(|a| {
+            serde_json::json!({
+                "start": a.start_line,
+                "end": a.end_line,
+                "note": a.note,
+            })
+        }).collect();
+
+        files.push(serde_json::json!({
+            "file": file,
+            "total": non_empty,
+            "reviewed": reviewed,
+            "percentage": pct,
+            "annotations": annotations,
+        }));
+    }
+
+    let total_pct = if total_lines > 0 {
+        total_reviewed as f64 / total_lines as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    let output = serde_json::json!({
+        "total_lines": total_lines,
+        "total_reviewed": total_reviewed,
+        "percentage": total_pct,
+        "files": files,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn extract_markdown(store: &Store) -> Result<()> {
+    println!("# Code Ownership Report\n");
+    println!("## Summary\n");
+
+    let mut total_lines = 0;
+    let mut total_reviewed = 0;
+
+    for (file, ownership) in &store.files {
+        let source = std::fs::read_to_string(file).unwrap_or_default();
+        let lines: Vec<&str> = source.lines().collect();
+        let non_empty = lines.iter().filter(|l| !l.trim().is_empty()).count();
+
+        let reviewed = ownership.entries.values()
+            .filter(|e| {
+                if let Some(line_content) = lines.get(e.line - 1) {
+                    if line_content.trim().is_empty() {
+                        return false;
+                    }
+                }
+                e.tags.contains(&"r".to_string()) || e.tags.contains(&"a".to_string())
+            })
+            .count();
+
+        total_lines += non_empty;
+        total_reviewed += reviewed;
+
+        let pct = if non_empty > 0 {
+            reviewed as f64 / non_empty as f64 * 100.0
+        } else {
+            0.0
+        };
+
+        println!("| {} | {} | {} | {:.1}% |", file, reviewed, non_empty, pct);
+    }
+
+    let total_pct = if total_lines > 0 {
+        total_reviewed as f64 / total_lines as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    println!("\n**Total: {:.1}%** ({}/{})\n", total_pct, total_reviewed, total_lines);
+
+    // Annotations
+    let has_annotations = store.files.values().any(|f| !f.annotations.is_empty());
+    if has_annotations {
+        println!("## Annotations\n");
+
+        for (file, ownership) in &store.files {
+            if ownership.annotations.is_empty() {
+                continue;
+            }
+
+            println!("### {}\n", file);
+
+            let source = std::fs::read_to_string(file).unwrap_or_default();
+            let source_lines: Vec<&str> = source.lines().collect();
+
+            for ann in &ownership.annotations {
+                println!("**Lines {}-{}:**\n", ann.start_line, ann.end_line);
+                println!("```");
+                for line_num in ann.start_line..=ann.end_line {
+                    if let Some(line) = source_lines.get(line_num - 1) {
+                        println!("{}", line);
+                    }
+                }
+                println!("```\n");
+                println!("> {}\n", ann.note);
+            }
+        }
+    }
+
+    Ok(())
+}
