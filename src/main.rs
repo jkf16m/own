@@ -24,10 +24,10 @@ enum Commands {
         /// Specific file to check (optional)
         file: Option<PathBuf>,
     },
-    /// Scan directory and show files needing review
-    Scan {
-        /// Directory to scan (default: current directory)
-        dir: Option<PathBuf>,
+    /// Add files to track ownership
+    Add {
+        /// Directory or file to add (default: current directory)
+        path: Option<PathBuf>,
     },
     /// Extract rejected or approved lines with annotations for AI review
     Extract {
@@ -54,9 +54,9 @@ fn main() -> Result<()> {
         Commands::Status { file } => {
             own::status(file.as_deref())?;
         }
-        Commands::Scan { dir } => {
-            let scan_dir = dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            own::scan(&scan_dir)?;
+        Commands::Add { path } => {
+            let add_path = path.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            own::add(&add_path)?;
         }
         Commands::Extract { rejected, approved, file } => {
             let state = if rejected {

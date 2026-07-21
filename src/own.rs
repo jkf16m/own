@@ -1026,7 +1026,7 @@ pub fn init() -> Result<()> {
 
 // ─── Scan Command ────────────────────────────────────────────────────────────
 
-pub fn scan(dir: &Path) -> Result<()> {
+pub fn add(dir: &Path) -> Result<()> {
     let store = OwnershipStore::load()?;
     let repo_root = std::env::current_dir()?;
     
