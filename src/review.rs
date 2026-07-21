@@ -710,7 +710,11 @@ fn run_app(
                             _ => {}
                         },
                         Mode::Normal => match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            KeyCode::Esc => {
+                                // Back to view mode
+                                state.mode = Mode::View;
+                            }
+                            KeyCode::Char('q') => return Ok(()),
                             KeyCode::Char('j') | KeyCode::Down => state.move_cursor(1),
                             KeyCode::Char('k') | KeyCode::Up => state.move_cursor(-1),
                             KeyCode::Char('g') => {
