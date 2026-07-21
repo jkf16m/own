@@ -45,6 +45,7 @@ enum Mode {
     SelectTagRemove,
     Selecting,
     Command,
+    ViewAnnotation,
 }
 
 impl ReviewState {
@@ -85,11 +86,11 @@ impl ReviewState {
             .unwrap_or_default()
     }
 
-    fn set_line_tags(&mut self, tags: Vec<String>, note: Option<String>) {
+    fn set_line_tags(&mut self, tags: Vec<String>) {
         let line_num = self.line_number();
         self.store
             .get_file_mut(&self.file_name)
-            .set_line(line_num, tags, note);
+            .set_line(line_num, tags);
     }
 
     fn toggle_tag(&mut self, tag: &str) {
@@ -99,13 +100,13 @@ impl ReviewState {
         } else {
             current.push(tag.to_string());
         }
-        self.set_line_tags(current, None);
+        self.set_line_tags(current);
     }
 
     fn remove_tag(&mut self, tag: &str) {
         let mut current = self.get_line_tags();
         current.retain(|t| t != tag);
-        self.set_line_tags(current, None);
+        self.set_line_tags(current);
     }
 
     fn sync_tag_on_selection(&mut self, tag: &str) {
@@ -131,21 +132,20 @@ impl ReviewState {
                 tags.push(tag.to_string());
             }
             
-            self.store.get_file_mut(&self.file_name).set_line(line_num, tags, None);
+            self.store.get_file_mut(&self.file_name).set_line(line_num, tags);
         }
     }
 
-    fn set_note_on_selection(&mut self, note: String) {
+    fn set_annotation(&mut self, note: String) {
         let start = self.select_start.unwrap_or(self.line_number());
         let end = self.select_end.unwrap_or(self.line_number());
         let min = start.min(end);
         let max = start.max(end);
+        self.store.get_file_mut(&self.file_name).set_annotation(min, max, note);
+    }
 
-        for line_num in min..=max {
-            let entry = self.store.get_file(&self.file_name).entries.get(&line_num);
-            let tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
-            self.store.get_file_mut(&self.file_name).set_line(line_num, tags, Some(note.clone()));
-        }
+    fn get_annotation(&self, line: usize) -> Option<&crate::store::Annotation> {
+        self.store.get_file(&self.file_name).get_annotation(line)
     }
 
     fn is_in_selection(&self, line_num: usize) -> bool {
@@ -338,7 +338,7 @@ fn run_app(
                     let ownership = state.store.get_file(&state.file_name);
                     let entry = ownership.entries.get(&line_num);
                     let has_tags = entry.map(|e| !e.tags.is_empty()).unwrap_or(false);
-                    let note = entry.and_then(|e| e.note.as_ref());
+                    let annotation = ownership.get_annotation(line_num);
 
                     // Build marker - colored dots for tags
                     let marker_spans: Vec<Span> = if has_tags {
@@ -373,9 +373,9 @@ fn run_app(
                     spans.push(Span::raw(" │ "));
                     spans.push(Span::styled(line.clone(), line_style));
 
-                    if let Some(note) = note {
+                    if let Some(ann) = annotation {
                         spans.push(Span::styled(
-                            format!(" ← {}", note),
+                            format!(" ← {}", ann.note),
                             Style::default().fg(Color::Magenta),
                         ));
                     }
@@ -445,6 +445,8 @@ fn run_app(
                     Span::raw(" rm  "),
                     Span::styled("n", Style::default().fg(Color::Cyan)),
                     Span::raw(" note  "),
+                    Span::styled("a", Style::default().fg(Color::Magenta)),
+                    Span::raw(" view  "),
                     Span::styled(":", Style::default().fg(Color::White)),
                     Span::raw(" cmd"),
                 ]))
@@ -542,6 +544,62 @@ fn run_app(
                     .block(Block::default().title("Remove Tag").borders(Borders::ALL));
                 f.render_widget(tag_list, popup_area);
             }
+
+            // Annotation popup
+            if state.mode == Mode::ViewAnnotation {
+                let line_num = state.line_number();
+                if let Some(ann) = state.get_annotation(line_num) {
+                    let popup_height = 8;
+                    let popup_width = 60;
+
+                    let area = f.area();
+                    let popup_x = (area.width - popup_width) / 2;
+                    let popup_y = (area.height - popup_height) / 2;
+                    let popup_area = ratatui::layout::Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+                    f.render_widget(Clear, popup_area);
+
+                    let ann_lines = vec![
+                        Line::from(Span::styled(
+                            format!("Lines {}-{}", ann.start_line, ann.end_line),
+                            Style::default().fg(Color::Yellow),
+                        )),
+                        Line::raw(""),
+                        Line::from(Span::raw(&ann.note)),
+                    ];
+
+                    let ann_popup = Paragraph::new(ann_lines)
+                        .block(Block::default().title("Annotation").borders(Borders::ALL));
+                    f.render_widget(ann_popup, popup_area);
+                } else {
+                    // No annotation on this line
+                    let popup_height = 5;
+                    let popup_width = 30;
+
+                    let area = f.area();
+                    let popup_x = (area.width - popup_width) / 2;
+                    let popup_y = (area.height - popup_height) / 2;
+                    let popup_area = ratatui::layout::Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+                    f.render_widget(Clear, popup_area);
+
+                    let ann_lines = vec![
+                        Line::from(Span::styled(
+                            "No annotation on this line",
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                        Line::raw(""),
+                        Line::from(Span::styled(
+                            "Press 'n' to add one",
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ];
+
+                    let ann_popup = Paragraph::new(ann_lines)
+                        .block(Block::default().title("Annotation").borders(Borders::ALL));
+                    f.render_widget(ann_popup, popup_area);
+                }
+            }
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
@@ -598,12 +656,15 @@ fn run_app(
                                             let entry = state.store.get_file(&state.file_name).entries.get(&line_num);
                                             let mut tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
                                             tags.retain(|t| t != &tag);
-                                            state.store.get_file_mut(&state.file_name).set_line(line_num, tags, None);
+                                            state.store.get_file_mut(&state.file_name).set_line(line_num, tags);
                                         }
                                     } else {
                                         state.remove_tag(&tag);
                                     }
                                 }
+                            }
+                            KeyCode::Char('a') => {
+                                state.mode = Mode::ViewAnnotation;
                             }
                             KeyCode::Char('v') => {
                                 state.select_start = Some(state.line_number());
@@ -711,12 +772,7 @@ fn run_app(
                             }
                             KeyCode::Enter => {
                                 let note = state.input_buffer.clone();
-                                if state.select_start.is_some() {
-                                    state.set_note_on_selection(note);
-                                } else {
-                                    let tags = state.get_line_tags();
-                                    state.set_line_tags(tags, Some(note));
-                                }
+                                state.set_annotation(note);
                                 state.mode = Mode::Normal;
                                 state.input_buffer.clear();
                             }
@@ -761,6 +817,12 @@ fn run_app(
                             }
                             KeyCode::Backspace => {
                                 state.input_buffer.pop();
+                            }
+                            _ => {}
+                        },
+                        Mode::ViewAnnotation => match key.code {
+                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('a') => {
+                                state.mode = Mode::Normal;
                             }
                             _ => {}
                         },
