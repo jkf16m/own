@@ -42,6 +42,7 @@ enum Mode {
     Normal,
     InputNote,
     SelectTag,
+    SelectTagRemove,
     Selecting,
     Command,
 }
@@ -101,7 +102,40 @@ impl ReviewState {
         self.set_line_tags(current, None);
     }
 
-    fn toggle_tag_on_selection(&mut self, tag: &str) {
+    fn remove_tag(&mut self, tag: &str) {
+        let mut current = self.get_line_tags();
+        current.retain(|t| t != tag);
+        self.set_line_tags(current, None);
+    }
+
+    fn sync_tag_on_selection(&mut self, tag: &str) {
+        let start = self.select_start.unwrap_or(self.line_number());
+        let end = self.select_end.unwrap_or(self.line_number());
+        let min = start.min(end);
+        let max = start.max(end);
+
+        // Check if ALL lines have the tag
+        let all_have = (min..=max).all(|line_num| {
+            let entry = self.store.get_file(&self.file_name).entries.get(&line_num);
+            entry.map(|e| e.tags.contains(&tag.to_string())).unwrap_or(false)
+        });
+
+        // If all have it, remove from all. Otherwise, add to all.
+        for line_num in min..=max {
+            let entry = self.store.get_file(&self.file_name).entries.get(&line_num);
+            let mut tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
+            
+            if all_have {
+                tags.retain(|t| t != tag);
+            } else if !tags.contains(&tag.to_string()) {
+                tags.push(tag.to_string());
+            }
+            
+            self.store.get_file_mut(&self.file_name).set_line(line_num, tags, None);
+        }
+    }
+
+    fn set_note_on_selection(&mut self, note: String) {
         let start = self.select_start.unwrap_or(self.line_number());
         let end = self.select_end.unwrap_or(self.line_number());
         let min = start.min(end);
@@ -109,15 +143,8 @@ impl ReviewState {
 
         for line_num in min..=max {
             let entry = self.store.get_file(&self.file_name).entries.get(&line_num);
-            let mut tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
-            
-            if tags.contains(&tag.to_string()) {
-                tags.retain(|t| t != tag);
-            } else {
-                tags.push(tag.to_string());
-            }
-            
-            self.store.get_file_mut(&self.file_name).set_line(line_num, tags, None);
+            let tags = entry.map(|e| e.tags.clone()).unwrap_or_default();
+            self.store.get_file_mut(&self.file_name).set_line(line_num, tags, Some(note.clone()));
         }
     }
 
@@ -407,13 +434,15 @@ fn run_app(
                     Span::styled("j/k", Style::default().fg(Color::Yellow)),
                     Span::raw(" move  "),
                     Span::styled("v", Style::default().fg(Color::Green)),
-                    Span::raw(" select  "),
+                    Span::raw(" sel  "),
                     Span::styled("t", Style::default().fg(Color::Green)),
-                    Span::raw(" toggle"),
+                    Span::raw(" tag"),
                     Span::styled(last_tag_str, Style::default().fg(Color::Cyan)),
                     Span::raw("  "),
                     Span::styled("T", Style::default().fg(Color::Green)),
                     Span::raw(" pick  "),
+                    Span::styled("r", Style::default().fg(Color::Red)),
+                    Span::raw(" rm  "),
                     Span::styled("n", Style::default().fg(Color::Cyan)),
                     Span::raw(" note  "),
                     Span::styled(":", Style::default().fg(Color::White)),
@@ -468,6 +497,51 @@ fn run_app(
                     .block(Block::default().title("Tags").borders(Borders::ALL));
                 f.render_widget(tag_list, popup_area);
             }
+
+            // Tag removal popup
+            if state.mode == Mode::SelectTagRemove {
+                let filtered = state.get_filtered_tags();
+                let popup_height = (filtered.len() as u16 + 2).min(15);
+                let popup_width = 40;
+
+                let area = f.area();
+                let popup_x = (area.width - popup_width) / 2;
+                let popup_y = (area.height - popup_height) / 2;
+                let popup_area = ratatui::layout::Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+                f.render_widget(Clear, popup_area);
+
+                let tag_lines: Vec<Line> = filtered
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| {
+                        let style = if i == state.tag_cursor {
+                            Style::default()
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default()
+                        };
+
+                        // Check if tag is on current line
+                        let current_tags = state.get_line_tags();
+                        let marker = if current_tags.contains(name) {
+                            Span::styled("✗ ", Style::default().fg(Color::Red))
+                        } else {
+                            Span::raw("  ")
+                        };
+
+                        Line::from(vec![
+                            marker,
+                            Span::styled(name.clone(), style),
+                        ])
+                    })
+                    .collect();
+
+                let tag_list = Paragraph::new(tag_lines)
+                    .block(Block::default().title("Remove Tag").borders(Borders::ALL));
+                f.render_widget(tag_list, popup_area);
+            }
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
@@ -498,13 +572,18 @@ fn run_app(
                             }
                             KeyCode::Char('t') => {
                                 if state.select_start.is_some() {
-                                    // Apply to selection
+                                    // Sync tag on selection
                                     if let Some(tag) = state.last_tag.clone() {
-                                        state.toggle_tag_on_selection(&tag);
+                                        state.sync_tag_on_selection(&tag);
                                     }
                                 } else if let Some(tag) = state.last_tag.clone() {
                                     state.toggle_tag(&tag);
                                 }
+                            }
+                            KeyCode::Char('r') => {
+                                state.mode = Mode::SelectTagRemove;
+                                state.tag_filter.clear();
+                                state.tag_cursor = 0;
                             }
                             KeyCode::Char('v') => {
                                 state.select_start = Some(state.line_number());
@@ -529,8 +608,40 @@ fn run_app(
                                 let filtered = state.get_filtered_tags();
                                 if let Some(tag) = filtered.get(state.tag_cursor) {
                                     state.last_tag = Some(tag.clone());
-                                    state.toggle_tag(tag);
+                                    if state.select_start.is_some() {
+                                        state.sync_tag_on_selection(tag);
+                                    } else {
+                                        state.toggle_tag(tag);
+                                    }
                                 }
+                            }
+                            KeyCode::Up => {
+                                state.tag_cursor = state.tag_cursor.saturating_sub(1);
+                            }
+                            KeyCode::Down => {
+                                let max = state.get_filtered_tags().len().saturating_sub(1);
+                                state.tag_cursor = (state.tag_cursor + 1).min(max);
+                            }
+                            KeyCode::Char(c) => {
+                                state.tag_filter.push(c);
+                                state.tag_cursor = 0;
+                            }
+                            KeyCode::Backspace => {
+                                state.tag_filter.pop();
+                                state.tag_cursor = 0;
+                            }
+                            _ => {}
+                        },
+                        Mode::SelectTagRemove => match key.code {
+                            KeyCode::Esc => {
+                                state.mode = Mode::Normal;
+                            }
+                            KeyCode::Enter => {
+                                let filtered = state.get_filtered_tags();
+                                if let Some(tag) = filtered.get(state.tag_cursor) {
+                                    state.remove_tag(tag);
+                                }
+                                state.mode = Mode::Normal;
                             }
                             KeyCode::Up => {
                                 state.tag_cursor = state.tag_cursor.saturating_sub(1);
@@ -560,8 +671,12 @@ fn run_app(
                             }
                             KeyCode::Char('t') => {
                                 if let Some(tag) = state.last_tag.clone() {
-                                    state.toggle_tag_on_selection(&tag);
+                                    state.sync_tag_on_selection(&tag);
                                 }
+                            }
+                            KeyCode::Char('n') => {
+                                state.mode = Mode::InputNote;
+                                state.input_buffer.clear();
                             }
                             KeyCode::Esc => {
                                 state.select_start = None;
@@ -580,8 +695,12 @@ fn run_app(
                             }
                             KeyCode::Enter => {
                                 let note = state.input_buffer.clone();
-                                let tags = state.get_line_tags();
-                                state.set_line_tags(tags, Some(note));
+                                if state.select_start.is_some() {
+                                    state.set_note_on_selection(note);
+                                } else {
+                                    let tags = state.get_line_tags();
+                                    state.set_line_tags(tags, Some(note));
+                                }
                                 state.mode = Mode::Normal;
                                 state.input_buffer.clear();
                             }
